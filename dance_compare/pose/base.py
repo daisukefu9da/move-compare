@@ -25,6 +25,7 @@ class TrackSet:
     keypoints: {id: (T, 17, 2)}  映っていないフレームは NaN
     scores:    {id: (T, 17)}     映っていないフレームは 0
     boxes:     {id: (T, 4)}      x1, y1, x2, y2。映っていないフレームは NaN
+    座標は元の動画のピクセル座標。フレーム番号は fps（分析用に間引いた後）で数える。
     """
 
     fps: float
@@ -34,6 +35,7 @@ class TrackSet:
     keypoints: dict[int, np.ndarray] = field(default_factory=dict)
     scores: dict[int, np.ndarray] = field(default_factory=dict)
     boxes: dict[int, np.ndarray] = field(default_factory=dict)
+    source_fps: float | None = None  # 元の動画のフレームレート（分析用に間引いた場合. fps は間引いた後）
 
     @property
     def ids(self) -> list[int]:
@@ -49,6 +51,29 @@ class TrackSet:
         self.keypoints[tid][frame] = kp
         self.scores[tid][frame] = sc
         self.boxes[tid][frame] = box
+
+    def video_frame(self, frame: int) -> int:
+        """このフレーム番号に当たる、元の動画のフレーム番号."""
+        if not self.source_fps:
+            return int(frame)
+        return int(round(frame / self.fps * self.source_fps))
+
+    def track_frame(self, video_frame: int) -> int:
+        """元の動画のフレーム番号 -> このフレーム番号."""
+        if not self.source_fps:
+            return int(video_frame)
+        return int(round(video_frame / self.source_fps * self.fps))
+
+    def rescaled(self, sx: float, sy: float, width: int, height: int, source_fps: float) -> "TrackSet":
+        """分析用に縮小した動画での座標を、元の動画の座標に戻す."""
+        out = TrackSet(self.fps, width, height, self.n_frames, source_fps=source_fps)
+        k = np.array([sx, sy])
+        b = np.array([sx, sy, sx, sy])
+        for tid in self.ids:
+            out.keypoints[tid] = self.keypoints[tid] * k
+            out.scores[tid] = self.scores[tid]
+            out.boxes[tid] = self.boxes[tid] * b
+        return out
 
     def present(self, tid: int) -> np.ndarray:
         return np.isfinite(self.boxes[tid][:, 0])
@@ -72,7 +97,7 @@ class TrackSet:
 
     def trim_frames(self, n: int) -> "TrackSet":
         """実際に読めたフレーム数に合わせて切り詰める."""
-        ts = TrackSet(self.fps, self.width, self.height, n)
+        ts = TrackSet(self.fps, self.width, self.height, n, source_fps=self.source_fps)
         for tid in self.ids:
             ts.keypoints[tid] = self.keypoints[tid][:n]
             ts.scores[tid] = self.scores[tid][:n]
@@ -81,7 +106,7 @@ class TrackSet:
 
     # --- 保存（推定結果のキャッシュ用） ---
     def save(self, path: str) -> None:
-        data = {"meta": np.array([self.fps, self.width, self.height, self.n_frames])}
+        data = {"meta": np.array([self.fps, self.width, self.height, self.n_frames, self.source_fps or 0.0])}
         for tid in self.ids:
             data[f"kp_{tid}"] = self.keypoints[tid]
             data[f"sc_{tid}"] = self.scores[tid]
@@ -91,8 +116,10 @@ class TrackSet:
     @classmethod
     def load(cls, path: str) -> "TrackSet":
         z = np.load(path)
-        fps, w, h, n = z["meta"]
-        ts = cls(float(fps), int(w), int(h), int(n))
+        meta = z["meta"]
+        fps, w, h, n = meta[:4]
+        src = float(meta[4]) if len(meta) > 4 and meta[4] > 0 else None
+        ts = cls(float(fps), int(w), int(h), int(n), source_fps=src)
         for key in z.files:
             if key.startswith("kp_"):
                 tid = int(key[3:])

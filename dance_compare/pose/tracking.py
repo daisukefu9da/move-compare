@@ -130,9 +130,12 @@ def stitch(ts: TrackSet, seed: int, exclude: set[int] = frozenset(), max_gap_s: 
 
 def resolve_id(ts: TrackSet, track_id: int | None = None, point: tuple[float, float] | None = None,
                frame: int = 0) -> int:
-    """ID / クリック位置 / 自動（最も大きく映っている人）から追跡 ID を決める."""
+    """ID / クリック位置 / 自動（最も大きく映っている人）から追跡 ID を決める.
+
+    frame はクリック位置を指定した、元の動画のフレーム番号。
+    """
     if track_id is None:
-        track_id = pick_by_point(ts, frame, *point) if point is not None else main_person(ts)
+        track_id = pick_by_point(ts, ts.track_frame(frame), *point) if point is not None else main_person(ts)
     if track_id not in ts.keypoints:
         raise ValueError(f"ID {track_id} の人物はいません（候補: {ts.ids}）")
     return track_id

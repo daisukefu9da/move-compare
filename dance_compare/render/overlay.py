@@ -78,7 +78,7 @@ def render_comparison(
     ref_seq: PoseSequence,
     user_seq: PoseSequence,
     out_path: str,
-    panel_height: int = 480,
+    panel_height: int = 720,
     angle_threshold: float = 20.0,
     progress=None,
     notes: list[str] | None = None,
@@ -107,6 +107,10 @@ def render_comparison(
     bar_h = max(120, H // 4)
     font = _font(max(16, H // 24))
     font_big = _font(max(20, H // 16))
+    # 骨格は分析用に間引いたフレームで数えている（ref_seq.fps）. 元の動画のコマはそれぞれの fps で読む
+    from ..media.video import probe
+
+    ref_vfps, user_vfps = probe(ref_video).fps, probe(user_video).fps
     rr = SequentialReader(ref_video)
     ur = SequentialReader(user_video)
     writer = _Writer(out_path, fps, ref_video, t0, t1 - t0)
@@ -115,8 +119,8 @@ def render_comparison(
             fi_r = min(int(round(t * fps)), len(ref_seq) - 1)
             tu = float(report.user_time(t))
             fi_u = min(max(int(round(tu * user_seq.fps)), 0), len(user_seq) - 1)
-            fr = rr.get(fi_r)
-            fu = ur.get(fi_u)
+            fr = rr.get(int(round(t * ref_vfps)))
+            fu = ur.get(max(int(round(tu * user_vfps)), 0))
             if fr is None or fu is None:
                 break
             bad = set()

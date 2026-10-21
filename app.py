@@ -122,7 +122,7 @@ def people_image(video: str, backend: str, frame: int):
 
     ts = extract_tracks(video, backend)
     f, boxes = people_at(ts, frame)
-    img = read_frame(video, f)
+    img = read_frame(video, ts.video_frame(f))  # f は分析用に間引いたフレーム番号
     for tid, b in boxes.items():
         x1, y1, x2, y2 = (int(v) for v in b)
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 255), 3)
@@ -157,7 +157,7 @@ def frame_at(video: str, t: float):
 def _auto_fill(video, backend, ref_id, user_id, f, cfg, mirror):
     """「自動で推定」ボタン: 二人の動きがそろっている区間を推定して、開始・終了の欄に入れる."""
     try:
-        curve = suggest_range(extract_tracks(video, backend), Pick(ref_id, frame=f), Pick(user_id, frame=f),
+        curve = suggest_range(extract_tracks(video, backend), Pick(ref_id), Pick(user_id),
                               cfg, mirror)
     except Exception as e:  # 画面上にメッセージを出して続ける
         st.session_state["sync_curve"] = (video, ref_id, user_id, None, str(e))
@@ -237,7 +237,7 @@ else:
             info = probe(video)
             pick_t = st.slider("人物を選ぶ時刻 [秒]（比較したい二人がはっきり映っている時刻にしてください）",
                                0.0, max(info.duration, 0.1), 0.0, 0.5)
-            frame = int(round(pick_t * info.fps))
+            frame = int(round(pick_t * extract_tracks(video, backend).fps))
             img, boxes, f = people_image(video, backend, frame)
             ids = sorted(boxes)
             spans = id_spans(video, backend)
@@ -257,7 +257,7 @@ else:
                     clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
                     st.info(f"クリックした人物: ID {clicked}")
             except ImportError:
-                st.image(img, caption=f"{fmt_time(f / info.fps)} の人物", width="stretch")
+                st.image(img, caption=f"{fmt_time(f / extract_tracks(video, backend).fps)} の人物", width="stretch")
             if len(ids) < 2:
                 st.error("この時刻には二人以上が検出されていません。別の時刻を試してください。")
             else:
@@ -271,7 +271,7 @@ else:
                 if st.button("解析する", type="primary", disabled=ref_id == user_id):
                     prog = Progress()
                     with st.spinner("解析中…"):
-                        result = analyze_single_video(video, Pick(ref_id, frame=f), Pick(user_id, frame=f), cfg,
+                        result = analyze_single_video(video, Pick(ref_id), Pick(user_id), cfg,
                                                       backend=backend, mirror=mirror, rhythm=rhythm, progress=prog,
                                                       time_range=(start, end), auto_range=auto_range)
 

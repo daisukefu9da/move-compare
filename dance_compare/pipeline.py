@@ -28,7 +28,7 @@ class Pick:
 
     track_id: int | None = None
     point: tuple[float, float] | None = None  # クリック位置（元動画のピクセル座標）
-    frame: int = 0                            # point を指定したフレーム
+    frame: int = 0                            # point を指定した、元の動画のフレーム番号
 
 
 @dataclass

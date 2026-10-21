@@ -106,14 +106,14 @@ def cmd_people(args):
     from .pose.tracking import people_at
 
     ts = extract_tracks(args.video, args.backend, not args.no_cache, lambda i, n: _progress("骨格推定", i, n))
-    f, boxes = people_at(ts, args.frame)
-    img = read_frame(args.video, f)
+    f, boxes = people_at(ts, ts.track_frame(args.frame))
+    img = read_frame(args.video, ts.video_frame(f))
     for tid, b in boxes.items():
         x1, y1, x2, y2 = (int(v) for v in b)
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 255), 2)
         cv2.putText(img, f"ID {tid}", (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 255), 2)
     cv2.imwrite(args.out, img)
-    print(f"フレーム {f} の人物: " + ", ".join(f"ID {t} (x={int((b[0]+b[2])/2)}, y={int((b[1]+b[3])/2)})"
+    print(f"{f / ts.fps:.1f} 秒（元の動画のフレーム {ts.video_frame(f)}）の人物: " + ", ".join(f"ID {t} (x={int((b[0]+b[2])/2)}, y={int((b[1]+b[3])/2)})"
                                              for t, b in boxes.items()))
     print(f"画像: {args.out}")
 

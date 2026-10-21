@@ -160,3 +160,29 @@ def test_single_video_warns_when_range_is_cut_by_tracking(tmp_path):
     write_synth_video(synth_dancer(duration=12), video, synth_beats(12))
     res = analyze_single_video(video, Pick(1), Pick(2), tracks=ts, time_range=(1.0, 11.0))
     assert any("レビュー対象は 0:08.0 以降を追跡できていません" in n for n in res.notes)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
+def test_proxy_and_rescale(tmp_path, monkeypatch):
+    import dance_compare.media.proxy as proxy
+    from dance_compare.synth import write_synth_video
+
+    monkeypatch.setattr(proxy, "PROXY_DIR", str(tmp_path / "proxy"))
+    s = synth_dancer(duration=2, fps=60, width=1280, height=720, size=200, center=(640, 300))
+    v = str(tmp_path / "v.mp4")
+    write_synth_video(s, v)
+    px = proxy.make_proxy(v, max_side=640, max_fps=30)
+    assert px.path != v and abs(px.scale_x - 2) < 0.01 and px.source_fps == 60
+    from dance_compare.media.video import probe
+    info = probe(px.path)
+    assert (info.width, info.height) == (640, 360) and abs(info.fps - 30) < 0.01
+
+    ts = TrackSet(30.0, 640, 360, 60)
+    ts.add(1, 0, s.keypoints[0] / 2, s.scores[0], np.array([10, 20, 30, 40.0]))
+    big = ts.rescaled(px.scale_x, px.scale_y, px.width, px.height, px.source_fps)
+    assert np.allclose(big.keypoints[1][0], s.keypoints[0])
+    assert np.allclose(big.boxes[1][0], [20, 40, 60, 80])
+    assert big.video_frame(15) == 30 and big.track_frame(30) == 15
+
+    # 小さい動画は作り直さない
+    assert proxy.make_proxy(v, max_side=2000, max_fps=60).path == v
