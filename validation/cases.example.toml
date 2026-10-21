@@ -1,0 +1,99 @@
+# 精度検証のケースファイル（ひな形）
+# テスト動画と「期待される検出結果」をセットで書きます。
+# コピーして cases.toml などにし、動画のパスと期待値を実際の内容に合わせてください。
+#
+#   python -m dance_compare validate validation/cases.toml --out validation_out
+#
+# 書き方の詳細は validation/README.md を参照。
+
+[settings]
+# 全ケース共通の設定（ケース側に同じ項目を書けば上書き）
+backend = "yolo"
+count_tolerance = 1        # カウント範囲の前後 1 カウントまでは「正しい場所」とみなす
+first_one = 2.0            # お手本動画で「1エイト目の1」に当たる時刻 [秒]（必ず指定するのがおすすめ）
+# bpm = 120                # 拍を自動検出せず BPM で指定する場合
+# config = "../tuning.toml"  # 解析パラメータ
+# base_dir = "videos"      # 動画パスの基準フォルダ（既定はこのファイルのあるフォルダ）
+
+# ---------------------------------------------------------------------------
+[[case]]
+name = "elbow_bent"
+note = "2エイト目の1〜8カウントで、わざと右肘を曲げたままにする"
+ref = "videos/ref.mp4"
+user = "videos/elbow_bent.mp4"
+  [[case.expect]]            # 検出されるべきこと
+  aspect = "shape"           # 観点
+  kind = "angle"             # 項目（省略可）
+  part = "right_elbow"       # 部位（省略可）
+  direction = "smaller"      # 向き: 角度が小さい = 深く曲がっている
+  start = "2-1"              # 2エイト目の1カウントから
+  end = "2-8"                # 2エイト目の8カウントまで（含む）
+  max = -20                  # ズレ量 [°] が -20 以下（20°以上曲がっている）
+  [[case.forbid]]            # 検出されるべきでないこと
+  aspect = "timing"
+
+# ---------------------------------------------------------------------------
+[[case]]
+name = "half_beat_late"
+note = "全体を半拍遅らせて踊る（BPM 120 なら 250ms）"
+ref = "videos/ref.mp4"
+user = "videos/half_beat_late.mp4"
+  [[case.expect]]
+  aspect = "timing"
+  kind = "early_late"
+  direction = "late"
+  min = 150                  # 全体の傾向として 150〜350ms 遅れ（start/end を書かなければ「全体」）
+  max = 350
+  [[case.forbid]]
+  aspect = "shape"
+
+# ---------------------------------------------------------------------------
+[[case]]
+name = "landing_late"
+note = "3エイト目のステップの着地だけ遅らせる"
+ref = "videos/ref.mp4"
+user = "videos/landing_late.mp4"
+  [[case.expect]]
+  aspect = "steps"
+  kind = "landing"
+  direction = "late"
+  start = "3-1"
+  end = "3-8"
+  min = 60
+  [[case.forbid]]
+  aspect = "shape"
+  [[case.forbid]]            # 他の区間では着地のズレが出ないこと
+  aspect = "steps"
+  kind = "landing"
+  start = "1-1"
+  end = "2-6"
+
+# ---------------------------------------------------------------------------
+[[case]]
+name = "small_amplitude"
+note = "動きを小さめにする（振れ幅を抑える）"
+ref = "videos/ref.mp4"
+user = "videos/small_amplitude.mp4"
+  [[case.expect]]
+  aspect = "amplitude"
+  part = ["left_wrist", "right_wrist"]   # どちらかで出ればよい
+  direction = "smaller"
+  max = 0.85                 # 手本の 85% 以下
+  [[case.forbid]]
+  aspect = "timing"
+  [[case.forbid]]
+  aspect = "sharpness"
+
+# ---------------------------------------------------------------------------
+# 1動画モードの例
+# [[case]]
+# name = "single_video_example"
+# mode = "single"
+# video = "videos/group.mp4"
+# ref_id = 1                 # または ref_point = [420, 300]（frame で指定したフレーム上の位置）
+# user_id = 3
+#   [[case.expect]]
+#   aspect = "shape"
+#   part = "left_knee"
+#   start = "1-5"
+#   end = "1-8"

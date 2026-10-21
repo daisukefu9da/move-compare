@@ -12,6 +12,7 @@ import subprocess
 
 import numpy as np
 
+from ..core.preprocess import clean
 from ..core.preprocess import mirror as mirror_seq
 from ..core.preprocess import normalize
 from ..core.report import Report
@@ -85,12 +86,9 @@ def render_comparison(
 
     ref_seq / user_seq は元動画のフレームと 1 対 1 に対応する（切り出し前の）骨格系列。
     """
-    import cv2
-
-    from ..core.preprocess import clean
-
-    ref_seq = clean(ref_seq, 0.3, 0.04)
-    user_seq = clean(user_seq, 0.3, 0.04)
+    c = report.meta["config"]
+    ref_seq = clean(ref_seq, c["conf_threshold"], c["smooth_sigma_s"])
+    user_seq = clean(user_seq, c["conf_threshold"], c["smooth_sigma_s"])
     mirrored = report.meta.get("mirror_ref", False)
     ref_body, _, _ = normalize((mirror_seq(ref_seq) if mirrored else ref_seq).keypoints)
     user_body, _, _ = normalize(user_seq.keypoints)

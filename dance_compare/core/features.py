@@ -73,7 +73,7 @@ class Features:
     stance: np.ndarray        # (T,)
     hip: np.ndarray           # (T, 2) 腰の中点の位置（world 座標）
     end_speed: np.ndarray     # (T, 4) 手首・足首の速さ [胴長/秒]
-    end_accel: np.ndarray     # (T, 4) 手首・足首の加速度の大きさ
+    end_accel: np.ndarray     # (T, 4) 手首・足首の速さの変化率（加速・減速の鋭さ）
     body_speed: np.ndarray    # (T,) 全身の動きの速さ（アクセント検出用）
 
     @property
@@ -84,7 +84,14 @@ class Features:
         """DTW で使う姿勢ベクトル: 主要関節の体中心座標 + 角度（スケールを合わせる）."""
         pose = self.body[:, BODY_JOINTS].reshape(self.n, -1)
         ang = np.radians(self.angles) * 0.5
-        return np.concatenate([pose, ang], axis=1)
+        x = np.concatenate([pose, ang], axis=1)
+        # 各次元を系列内で標準化して「動きの形」で合わせる. 振れ幅が小さい・ずっと肘が曲がっている等の
+        # 差があっても、同じ動きの同じ瞬間どうしが対応するようにするため（差そのものは後で別に測る）.
+        # ほとんど動かない次元を拡大しないよう、ばらつきには下限を設ける
+        mean = np.nanmean(x, axis=0)
+        std = np.maximum(np.nanstd(x, axis=0), 0.15)
+        # 画面外などで全く取れない関節は 0 にして、距離に影響しないようにする
+        return np.nan_to_num((x - mean) / std)
 
 
 def compute_features(body: np.ndarray, world: np.ndarray, fps: float) -> Features:
@@ -92,9 +99,10 @@ def compute_features(body: np.ndarray, world: np.ndarray, fps: float) -> Feature
     hip = (world[:, KP["left_hip"]] + world[:, KP["right_hip"]]) / 2
     # 速度・加速度は微分でノイズが増えるので追加で平滑化する
     v = velocity(gaussian_smooth(world, 0.03 * fps), fps)
-    a = velocity(gaussian_smooth(v, 0.03 * fps), fps)
     end_speed = np.linalg.norm(v[:, ends], axis=2)
-    end_accel = np.linalg.norm(a[:, ends], axis=2)
+    # キレは「速さの変化」（接線方向の加速・減速）で測る. 加速度ベクトルの大きさだと、腕を回す動きの
+    # 遠心成分（速さ²/半径）が入り、動きが小さいだけで「キレがない」と判定されてしまう
+    end_accel = np.abs(velocity(gaussian_smooth(end_speed, 0.03 * fps), fps))
     body_speed = np.mean(np.linalg.norm(v[:, BODY_JOINTS], axis=2), axis=1)
     return Features(
         fps=fps, body=body, world=world,

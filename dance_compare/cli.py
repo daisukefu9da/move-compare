@@ -5,6 +5,7 @@
   python -m dance_compare single group.mp4 --ref-id 1 --user-id 3
   python -m dance_compare poses ref_pose.json user_pose.json     # 推定済みの骨格どうしを比較
   python -m dance_compare demo --out demo/                         # 合成データで動作確認
+  python -m dance_compare validate validation/cases.toml           # 期待される検出結果との照合
 """
 
 from __future__ import annotations
@@ -149,6 +150,22 @@ def cmd_demo(args):
     _finish(result, args)
 
 
+def cmd_validate(args):
+    from .validation import validate
+
+    results = validate(args.cases, args.out, render=args.video, use_cache=not args.no_cache, only=args.case)
+    passed = sum(r.passed for r in results)
+    print(f"\n{passed}/{len(results)} ケースが合格. 結果: {args.out}/validation.md")
+    sys.exit(0 if passed == len(results) else 1)
+
+
+def cmd_make_validation_set(args):
+    from .validation import make_synthetic_set
+
+    path = make_synthetic_set(args.out)
+    print(f"作成しました: {path}\n実行: python -m dance_compare validate {path}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="dance_compare", description="お手本とのダンス比較")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -199,6 +216,18 @@ def main(argv=None):
     p.add_argument("--out", default="demo")
     p.add_argument("--no-video", action="store_true")
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("validate", help="テスト動画と期待される検出結果を照合する（精度検証）")
+    p.add_argument("cases", help="ケースファイル (TOML)")
+    p.add_argument("--out", default="validation_out")
+    p.add_argument("--case", action="append", help="このケースだけ実行（複数指定可）")
+    p.add_argument("--video", action="store_true", help="各ケースの比較動画も作る")
+    p.add_argument("--no-cache", action="store_true")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("make-validation-set", help="合成データで検証セットの見本を作る")
+    p.add_argument("--out", default="validation/synth")
+    p.set_defaults(func=cmd_make_validation_set)
 
     args = ap.parse_args(argv)
     args.func(args)

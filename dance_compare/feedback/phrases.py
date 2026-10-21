@@ -50,7 +50,8 @@ def describe(f: Finding) -> str:
     if k == "travel":
         return f"移動の量・方向が手本と違う（{'移動が足りない' if d == 'less' else '動きすぎ'}）"
     if k == "landing":
-        return f"足の着地が手本より平均{v:.0f}ms{'遅い' if d == 'late' else '早い'}"
+        foot = p or "足"
+        return f"{foot}の着地が手本より約{v:.0f}ms{'遅い' if d == 'late' else '早い'}"
     return f"{ASPECTS.get(f.aspect, f.aspect)}: {f.kind} {f.direction} {f.value:.2f}"
 
 

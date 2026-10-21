@@ -13,6 +13,7 @@ from .core.config import AnalysisConfig
 from .core.counts import CountGrid
 from .core.report import Report
 from .core.skeleton import PoseSequence
+from .feedback.table import markdown_table, write_csv
 from .media import audio as audio_mod
 from .media.video import probe
 from .pose.base import TrackSet, get_backend
@@ -209,13 +210,16 @@ def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool =
         "markdown": os.path.join(out_dir, "report.md"),
         "ref_pose": os.path.join(out_dir, "ref_pose.json"),
         "user_pose": os.path.join(out_dir, "user_pose.json"),
+        "findings_csv": os.path.join(out_dir, "findings.csv"),
     }
     with open(paths["json"], "w", encoding="utf-8") as f:
         json.dump(result.report.to_dict(), f, ensure_ascii=False, indent=1)
     with open(paths["markdown"], "w", encoding="utf-8") as f:
         f.write(text)
+        f.write("\n### 検出一覧（カウント・部位・観点・ズレ量）\n\n" + markdown_table(result.report))
         if result.notes:
             f.write("\n### 処理メモ\n\n" + "\n".join(f"- {n}" for n in result.notes) + "\n")
+    write_csv(result.report, paths["findings_csv"])
     result.ref_seq.save_json(paths["ref_pose"])
     result.user_seq.save_json(paths["user_pose"])
     if render:

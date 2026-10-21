@@ -32,6 +32,8 @@ class AnalysisConfig:
     # --- 指摘のしきい値 ---
     angle_threshold_deg: float = 20.0      # 関節角度の差
     timing_threshold_ms: float = 120.0     # 手本との相対的な早い/遅い
+    min_motion_for_timing: float = 0.3     # 手本の動きがこれより遅い区間はタイミングを評価しない [胴長/秒]
+    edge_margin_s: float = 0.5             # 先頭・末尾のこの範囲にかかる区間はタイミングを評価しない
     rhythm_threshold_ms: float = 60.0      # 拍に対する平均的なズレ
     amplitude_ratio_low: float = 0.75      # 振れ幅が手本の何倍未満なら「小さい」
     amplitude_ratio_high: float = 1.35     # 何倍超なら「大きい」
@@ -51,6 +53,8 @@ class AnalysisConfig:
     on_beat_tolerance_ms: float = 70.0
     landing_speed_on: float = 1.2      # 着地検出: 足首の下向き速度がこれを超えた後 [胴長/秒]
     landing_speed_off: float = 0.35    # これを下回った瞬間を着地とする
+    landing_match_window_s: float = 0.4  # 手本の着地に対応するレビュー対象の着地を探す範囲 [秒]
+    landing_threshold_ms: float = 80.0   # 着地のタイミング差の指摘しきい値
 
     # --- 音声による 2 動画の同期 ---
     audio_sync_min_confidence: float = 3.5  # 相関ピークの鋭さがこれ以上なら同期できたとみなす

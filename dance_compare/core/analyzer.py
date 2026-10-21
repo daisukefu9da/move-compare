@@ -103,6 +103,11 @@ def _exp_score(x: float, scale: float) -> float | None:
     return float(100 * np.exp(-abs(x) / scale))
 
 
+def _mean_or_none(xs) -> float | None:
+    xs = [x for x in xs if x is not None]
+    return float(np.mean(xs)) if xs else None
+
+
 def _nanmean(x) -> float:
     x = np.asarray(x, dtype=np.float64)
     x = x[np.isfinite(x)]
@@ -189,7 +194,7 @@ def compare(
     land_vs_ref = {}
     for foot in land_r:
         exp_t = np.interp(land_r[foot] * fps, np.arange(R.n), expected)
-        land_vs_ref[foot] = match_events(land_r[foot], land_u[foot], exp_t, 0.3)
+        land_vs_ref[foot] = match_events(land_r[foot], land_u[foot], exp_t, cfg.landing_match_window_s)
     all_land = np.concatenate(list(land_vs_ref.values())) if land_vs_ref else np.array([])
     rhythm["landing_vs_ref"] = offset_stats(all_land[np.isfinite(all_land)], cfg.on_beat_tolerance_ms)
     rhythm["bpm"] = grid.bpm if grid is not None else None
@@ -212,6 +217,11 @@ def compare(
             "label": grid.label(a, b) if grid is not None else None,
             "angle_diff": {n: float(np.mean(angle_diff[m, k])) for k, n in enumerate(ANGLE_NAMES)},
             "timing_ms": float(np.mean(timing_dev[m])),
+            "ref_motion": float(np.mean(R.body_speed[m])),  # 手本の動きの速さ（止まっている区間は時間差が測れない）
+            # 系列の両端は DTW の端点の影響で時間差が不正確になりやすい
+            # 動画の端で途中までしか無い区間（振れ幅・キレは動きの一部しか見えず比較できない）
+            "partial": bool((b - a) < nominal * 0.9),
+            "edge": bool(a - t_abs[0] < cfg.edge_margin_s or t_abs[-1] - b < cfg.edge_margin_s),
             "level_diff": float(np.mean(level_diff[m])),
             "facing_diff": float(np.mean(facing_diff[m])),
             "lean_diff": float(np.mean(lean_diff[m])),
@@ -237,6 +247,13 @@ def compare(
             sharp[name] = u_sharp / r_sharp if r_ext >= 0.5 and r_sharp > 0 else np.nan
         w["amplitude_ratio"] = amp
         w["sharpness_ratio"] = sharp
+        # 着地のタイミング（この区間にある手本の着地と、対応するレビュー対象の着地の差）
+        lt = np.concatenate([land_r[ft] + ref_s.t0 for ft in land_r])
+        lv = np.concatenate([land_vs_ref[ft] for ft in land_r])
+        sel = (lt >= a) & (lt < b) & np.isfinite(lv)
+        w["landing_ms"] = float(np.mean(lv[sel])) if sel.any() else None
+        w["landing_feet"] = sorted({ft for ft in land_r for x, y in zip(land_r[ft] + ref_s.t0, land_vs_ref[ft])
+                                    if a <= x < b and np.isfinite(y) and abs(y) >= cfg.landing_threshold_ms})
         in_w = (user_acc_on_ref >= a) & (user_acc_on_ref < b) & np.isfinite(user_acc_off)
         w["rhythm_ms"] = float(np.mean(user_acc_off[in_w])) if in_w.sum() >= 2 else None
         windows.append(w)
@@ -250,21 +267,21 @@ def compare(
         return float(np.mean(np.abs(vals))) if vals else float("nan")
 
     scores = {
-        "shape": _exp_score(float(np.mean(np.abs(angle_diff))), cfg.score_scale_angle_deg),
-        "timing": _exp_score(float(np.mean(np.abs(timing_dev))), cfg.score_scale_timing_ms),
+        "shape": _exp_score(_nanmean(np.abs(angle_diff)), cfg.score_scale_angle_deg),
+        "timing": _exp_score(_nanmean(np.abs(timing_dev)), cfg.score_scale_timing_ms),
         "amplitude": _exp_score(logs("amplitude_ratio"), cfg.score_scale_amplitude),
         "sharpness": _exp_score(logs("sharpness_ratio"), cfg.score_scale_sharpness),
     }
-    lv = [_exp_score(float(np.mean(np.abs(level_diff))), cfg.score_scale_level),
-          _exp_score(float(np.mean(np.abs(facing_diff))), cfg.facing_threshold_deg * 2),
-          _exp_score(float(np.mean(np.abs(lean_diff))), cfg.lean_threshold_deg * 2)]
-    scores["level"] = float(np.mean(lv))
-    st = [_exp_score(float(np.mean(np.abs(stance_diff))), cfg.stance_threshold * 2),
+    lv = [_exp_score(_nanmean(np.abs(level_diff)), cfg.score_scale_level),
+          _exp_score(_nanmean(np.abs(facing_diff)), cfg.facing_threshold_deg * 2),
+          _exp_score(_nanmean(np.abs(lean_diff)), cfg.lean_threshold_deg * 2)]
+    scores["level"] = _mean_or_none(lv)
+    st = [_exp_score(_nanmean(np.abs(stance_diff)), cfg.stance_threshold * 2),
           _exp_score(_nanmean([w["travel_diff"] for w in windows]), cfg.travel_threshold * 2)]
     lvr = rhythm["landing_vs_ref"]
     if lvr.get("count", 0) >= 3:
         st.append(_exp_score(abs(lvr["mean_ms"]) + lvr["std_ms"] * 0.5, cfg.score_scale_timing_ms))
-    scores["steps"] = float(np.mean([s for s in st if s is not None]))
+    scores["steps"] = _mean_or_none(st)
     if "user" in rhythm and rhythm["user"].get("count", 0) >= 3:
         u = rhythm["user"]
         scores["rhythm"] = _exp_score(abs(u["mean_ms"] - rhythm["bias_ms"]) + u["std_ms"] * 0.5,
@@ -296,7 +313,7 @@ def compare(
         rhythm=rhythm, timeline=timeline,
         warp={"ref": t_abs[::3], "user": (t_user + user_s.t0)[::3]},
         beats=[] if grid is None else grid.beats.tolist(),
-        first_one=None if grid is None else float(grid.beats[grid.origin]),
+        first_one=None if grid is None else grid.first_one,
     )
 
 
@@ -320,7 +337,8 @@ def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid |
                 # 角度が小さい = より曲がっている（肩・股関節は腕・脚が体に近い）
                 add(w, "shape", "angle", "smaller" if d < 0 else "larger", d, "deg",
                     abs(d) / cfg.angle_threshold_deg, part=name)
-        if abs(w["timing_ms"]) >= cfg.timing_threshold_ms:
+        if (abs(w["timing_ms"]) >= cfg.timing_threshold_ms and w["ref_motion"] >= cfg.min_motion_for_timing
+                and not w["edge"]):
             add(w, "timing", "early_late", "late" if w["timing_ms"] > 0 else "early", w["timing_ms"], "ms",
                 abs(w["timing_ms"]) / cfg.timing_threshold_ms)
         r = w["rhythm_ms"]
@@ -328,7 +346,7 @@ def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid |
             add(w, "rhythm", "beat_offset", "late" if r > bias else "early", r, "ms",
                 abs(r - bias) / (cfg.rhythm_threshold_ms * 1.5))
         for name, r in w["amplitude_ratio"].items():
-            if not np.isfinite(r):
+            if not np.isfinite(r) or w["partial"]:
                 continue
             if r < cfg.amplitude_ratio_low:
                 add(w, "amplitude", "amplitude", "smaller", r, "ratio",
@@ -337,9 +355,15 @@ def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid |
                 add(w, "amplitude", "amplitude", "larger", r, "ratio",
                     np.log(r) / np.log(cfg.amplitude_ratio_high), part=name)
         for name, r in w["sharpness_ratio"].items():
-            if np.isfinite(r) and r < cfg.sharpness_ratio_low:
+            if np.isfinite(r) and r < cfg.sharpness_ratio_low and not w["partial"]:
                 add(w, "sharpness", "sharpness", "weaker", r, "ratio",
                     np.log(r) / np.log(cfg.sharpness_ratio_low), part=name)
+        lm = w.get("landing_ms")
+        if lm is not None and abs(lm) >= cfg.landing_threshold_ms:
+            feet = w.get("landing_feet") or []
+            part = feet[0] if len(feet) == 1 else None
+            add(w, "steps", "landing", "late" if lm > 0 else "early", lm, "ms",
+                abs(lm) / cfg.landing_threshold_ms, part=part)
         if abs(w["level_diff"]) >= cfg.level_threshold:
             add(w, "level", "level", "higher" if w["level_diff"] > 0 else "lower", w["level_diff"], "torso",
                 abs(w["level_diff"]) / cfg.level_threshold)
@@ -399,9 +423,9 @@ def _tendencies(windows, rhythm, timing_dev, synced, cfg) -> list[Finding]:
                                   "landing_mean_ms": ul.get("mean_ms") if ul.get("count", 0) >= 3 else None,
                                   "on_beat_ratio": u["on_beat_ratio"]}))
     lv = rhythm.get("landing_vs_ref", {})
-    if lv.get("count", 0) >= 3 and abs(lv["mean_ms"]) >= cfg.rhythm_threshold_ms:
+    if lv.get("count", 0) >= 3 and abs(lv["mean_ms"]) >= cfg.landing_threshold_ms:
         out.append(Finding("steps", "landing", "late" if lv["mean_ms"] > 0 else "early", lv["mean_ms"], "ms",
-                           abs(lv["mean_ms"]) / cfg.rhythm_threshold_ms))
+                           abs(lv["mean_ms"]) / cfg.landing_threshold_ms))
     if synced:
         mean_t = float(np.median(timing_dev))
         if abs(mean_t) >= cfg.timing_threshold_ms * 0.6:

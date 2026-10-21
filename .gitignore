@@ -9,3 +9,5 @@ demo/
 *.pt
 *.task
 .env
+validation_out/
+validation/synth/

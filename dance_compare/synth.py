@@ -49,6 +49,8 @@ def synth_dancer(
     height: int = 480,
     noise: float = 0.0,
     seed: int = 0,
+    steps: bool = False,
+    step_delay: float | tuple[float, float, float] = 0.0,
 ) -> PoseSequence:
     """合成ダンサーの骨格系列.
 
@@ -58,6 +60,8 @@ def synth_dancer(
     sharpness:  ポーズ遷移にかける拍数（大きいほどぬるっと動く = キレがない）
     elbow_bend: (開始秒, 終了秒, 曲げる角度) その区間だけ右肘を曲げる
     size:       胴の長さ [px]（体格差のテスト用）
+    steps:      拍ごとに左右交互に足を上げて、拍の位置で着地する
+    step_delay: 足の着地だけを遅らせる秒数. (開始秒, 終了秒, 秒数) ならその区間だけ
     """
     rng = np.random.default_rng(seed)
     n = int(duration * fps)
@@ -111,6 +115,21 @@ def synth_dancer(
         shin /= np.linalg.norm(shin, axis=1, keepdims=True)
         kp[:, KP[f"{side}_knee"]] = kn
         kp[:, KP[f"{side}_ankle"]] = kn + shin * 0.9 * L
+
+    if steps:
+        if isinstance(step_delay, tuple):
+            s0, s1, d = step_delay
+            sd = np.where((t >= s0) & (t < s1), d, 0.0)
+        else:
+            sd = np.full(n, float(step_delay))
+        sp = ((t - delay_s - sd) * tempo - first_beat) / period  # 足だけの拍位置
+        k = np.ceil(sp).astype(int)          # 次に着地する拍
+        x = (sp - (k - 0.35)) / 0.35         # 拍の 0.35 拍前に上げ始め、拍で着地
+        lift = np.where((x > 0) & (x <= 1), np.sin(np.pi * x), 0.0) * 0.3 * L
+        for side, parity in (("left", 0), ("right", 1)):
+            h = np.where(k % 2 == parity, lift, 0.0)
+            kp[:, KP[f"{side}_ankle"], 1] -= h
+            kp[:, KP[f"{side}_knee"], 1] -= h * 0.6
 
     if noise > 0:
         kp += rng.normal(0, noise, kp.shape)

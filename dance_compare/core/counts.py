@@ -17,10 +17,10 @@ class CountGrid:
             raise ValueError("拍が 2 つ以上必要です")
         self.beats = np.sort(beats)
         self.interval = float(np.median(np.diff(self.beats)))
-        if first_one is None:
-            self.origin = 0
-        else:
-            self.origin = int(np.argmin(np.abs(self.beats - first_one)))
+        self.origin = 0
+        if first_one is not None:
+            # 検出された拍の範囲外（最初の拍を取りこぼした等）でも、拍間隔で外挿して位置を決める
+            self.origin = int(round(float(self.beat_position(first_one))))
 
     @classmethod
     def from_bpm(cls, bpm: float, first_beat: float, duration: float) -> "CountGrid":
@@ -28,6 +28,10 @@ class CountGrid:
         start = first_beat - step * np.floor(first_beat / step)
         beats = np.arange(start, duration + step, step)
         return cls(beats, first_one=first_beat)
+
+    @property
+    def first_one(self) -> float:
+        return float(self.time_of(0))
 
     @property
     def bpm(self) -> float:

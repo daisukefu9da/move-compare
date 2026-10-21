@@ -43,6 +43,9 @@ def gaussian_smooth(x: np.ndarray, sigma: float, axis: int = 0) -> np.ndarray:
 def clean(seq: PoseSequence, conf_threshold: float, smooth_sigma_s: float) -> PoseSequence:
     """信頼度の低い関節を補間し、平滑化した PoseSequence を返す."""
     valid = seq.scores >= conf_threshold
+    # ほとんど信頼できるフレームが無い関節（画面の端で切れている等）は、低い信頼度でも使う
+    weak = valid.mean(axis=0) < 0.1
+    valid[:, weak] = seq.scores[:, weak] > 0.05
     kp = interpolate_missing(seq.keypoints, valid)
     finite = np.all(np.isfinite(kp), axis=(0, 2))
     if finite.any():
@@ -84,7 +87,7 @@ def body_scale(kp: np.ndarray) -> float:
     torso = np.linalg.norm(_mid(kp, "left_shoulder", "right_shoulder") - _mid(kp, "left_hip", "right_hip"), axis=1)
     torso = torso[np.isfinite(torso) & (torso > 0)]
     if torso.size == 0:
-        raise ValueError("胴体の関節が検出できませんでした")
+        raise ValueError("肩・腰の関節が検出できませんでした。上半身から腰までが映っている動画を使ってください")
     return float(np.median(torso))
 
 

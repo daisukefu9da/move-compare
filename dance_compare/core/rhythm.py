@@ -108,7 +108,10 @@ def foot_landings(world: np.ndarray, fps: float, speed_on: float, speed_off: flo
             if vy[i] < -speed_on:
                 falling = True
             elif falling and speed[i] < speed_off:
-                times.append(i / fps)
+                # 速さが speed_off を下回った瞬間をフレーム間で線形補間
+                prev = speed[i - 1] if i > 0 else speed[i]
+                frac = (prev - speed_off) / (prev - speed[i]) if prev > speed[i] else 1.0
+                times.append((i - 1 + float(np.clip(frac, 0, 1))) / fps)
                 falling = False
         out[name] = np.array(times)
     return out

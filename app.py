@@ -16,7 +16,7 @@ from dance_compare.core.config import AnalysisConfig
 from dance_compare.core.report import ASPECTS
 from dance_compare.core.skeleton import JA_NAMES
 from dance_compare.feedback import get_narrator
-from dance_compare.feedback.phrases import describe, where
+from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
                                     extract_tracks, save_outputs)
 
@@ -228,12 +228,15 @@ if "last" in st.session_state:
     with right:
         st.markdown(text)
 
-    st.subheader("指摘の一覧")
-    rows = [{"優先度": round(f.severity, 2), "観点": ASPECTS[f.aspect], "場所": where(f), "内容": describe(f)}
-            for f in rep.findings]
+    st.subheader("検出一覧（カウント・部位・観点・ズレ量）")
+    rows = [{"範囲": r["scope"], "カウント": r["label"], "開始[秒]": r["t_start"], "終了[秒]": r["t_end"],
+             "観点": r["aspect_ja"], "項目": r["kind_ja"], "部位": r["part_ja"], "ズレ量": r["value_text"],
+             "優先度": r["severity"], "説明": r["description"]} for r in findings_rows(rep)]
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
+    with open(paths["findings_csv"], "rb") as f:
+        c3.download_button("findings.csv", f.read(), "findings.csv")
     with open(paths["json"], "rb") as f:
         c1.download_button("report.json", f.read(), "report.json")
     with open(paths["markdown"], "rb") as f:

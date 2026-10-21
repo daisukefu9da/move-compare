@@ -155,3 +155,10 @@ def test_pose_sequence_json_roundtrip(tmp_path):
 def test_config_rejects_unknown_keys():
     with pytest.raises(ValueError):
         AnalysisConfig.from_dict({"nope": 1})
+
+
+def test_count_grid_first_one_outside_detected_beats():
+    g = CountGrid(np.arange(1.0, 20, 0.5), first_one=0.5)  # 0.5 の拍が検出されていない
+    assert g.label(0.5) == "1エイト目の1カウント"
+    assert g.label(1.0) == "1エイト目の2カウント"
+    assert abs(g.first_one - 0.5) < 1e-9
