@@ -1,0 +1,9 @@
+# ダンス動画向けの ByteTrack 設定（Ultralytics の bytetrack.yaml を元に変更）
+# 人が重なる・横切る等で一時的に見えなくなっても、別人の ID を振らずに待つ時間を長くしている
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 90        # 見失ってから同じ人として待つフレーム数（既定 30 = 30fps で 1 秒 → 3 秒）
+match_thresh: 0.8
+fuse_score: True

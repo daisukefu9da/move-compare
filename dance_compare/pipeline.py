@@ -19,7 +19,7 @@ from .media import audio as audio_mod
 from .media.video import probe
 from .pose.base import TrackSet, get_backend
 from .pose.cache import track_cached
-from .pose.tracking import select_person
+from .pose.tracking import select_pair, select_person
 
 
 @dataclass
@@ -161,16 +161,32 @@ def analyze_two_videos(
 
 def _select_pair(tracks: TrackSet, ref_pick: Pick, user_pick: Pick) -> tuple[PoseSequence, PoseSequence, float, float]:
     """1 本の動画から二人を選び、二人とも映っている区間 (開始, 終了) [秒] とともに返す."""
-    ref_seq = select_person(tracks, ref_pick.track_id, ref_pick.point, ref_pick.frame)
-    user_seq = select_person(tracks, user_pick.track_id, user_pick.point, user_pick.frame,
-                             exclude=set(ref_seq.meta["track_ids"]))
-    if set(ref_seq.meta["track_ids"]) & set(user_seq.meta["track_ids"]):
-        raise ValueError("お手本とレビュー対象に同じ人物が選ばれています")
+    ref_seq, user_seq = select_pair(tracks, (ref_pick.track_id, ref_pick.point, ref_pick.frame),
+                                    (user_pick.track_id, user_pick.point, user_pick.frame))
     both = np.isfinite(ref_seq.keypoints[:, 5, 0]) & np.isfinite(user_seq.keypoints[:, 5, 0])
     present = np.where(both)[0]
     if present.size < ref_seq.fps * 2:
         raise ValueError("二人が同時に映っている区間が短すぎます")
     return ref_seq, user_seq, present[0] / ref_seq.fps, (present[-1] + 1) / ref_seq.fps
+
+
+def _tracking_notes(ref_seq: PoseSequence, user_seq: PoseSequence, want: tuple[float, float],
+                    got: tuple[float, float]) -> list[str]:
+    """指定した区間より短くなった理由（どちらの追跡が途切れたか）."""
+    out = []
+    fps = ref_seq.fps
+    for name, seq in (("お手本", ref_seq), ("レビュー対象", user_seq)):
+        p = np.where(np.isfinite(seq.keypoints[:, 5, 0]))[0]
+        first, last = p[0] / fps, (p[-1] + 1) / fps
+        if want[0] is not None and first > want[0] + 0.2:
+            out.append(f"{name}は {fmt_time(first)} より前を追跡できていません")
+        if want[1] is not None and last < want[1] - 0.2:
+            out.append(f"{name}は {fmt_time(last)} 以降を追跡できていません")
+    if out:
+        return [f"指定した区間（{fmt_time(want[0] or 0)}〜{fmt_time(want[1]) if want[1] else '最後'}）のうち、"
+                f"{fmt_time(got[0])}〜{fmt_time(got[1])} しか比較できませんでした: " + "、".join(out)
+                + "。人物の重なりなどで追跡が途切れた可能性があります。比較動画で骨格が乗っているか確認してください"]
+    return []
 
 
 def suggest_range(tracks: TrackSet, ref_pick: Pick, user_pick: Pick, cfg: AnalysisConfig | None = None,
@@ -221,8 +237,10 @@ def analyze_single_video(
         else:
             start = sync.start if start is None else start
             end = sync.end if end is None else end
+    want = (start, end)
     s = max(start if start is not None else s, s)
     e = min(end if end is not None else e, e)
+    notes += _tracking_notes(ref_seq, user_seq, want, (s, e))
     if e - s < 2.0:
         raise ValueError(f"比較する区間が短すぎます（{fmt_time(s)}〜{fmt_time(e)}）")
     if sync is not None and sync.start is not None:

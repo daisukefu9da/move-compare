@@ -93,3 +93,70 @@ def test_end_to_end_with_synthetic_videos(tmp_path):
     paths = save_outputs(res, str(tmp_path / "out"), get_narrator("rule").narrate(res.report))
     import os
     assert os.path.getsize(paths["video"]) > 10000
+
+
+def _tracks_with_switches(switches):
+    """二人のダンサー. switches = [(人物, 切替フレーム, 新ID, 途切れるフレーム数, 重なるフレーム数)]"""
+    a = synth_dancer(duration=12, center=(150, 260))
+    b = synth_dancer(duration=12, center=(480, 260), amplitude=0.5)
+    n = len(a)
+    ts = TrackSet(30.0, 640, 480, n)
+    ids = {0: [(0, 1)], 1: [(0, 2)]}  # 人物 -> [(開始フレーム, ID)]
+    gaps = {0: [], 1: []}
+    for who, f, new_id, gap, overlap in switches:
+        ids[who].append((f, new_id))
+        gaps[who].append((f, gap, overlap))
+    for who, s in ((0, a), (1, b)):
+        for f in range(n):
+            cur = [tid for start, tid in ids[who] if start <= f][-1]
+            hidden = any(g_f - g <= f < g_f for g_f, g, _ in gaps[who])
+            if hidden:
+                continue
+            kp = s.keypoints[f]
+            box = np.array([*kp.min(0), *kp.max(0)])
+            ts.add(cur, f, kp, s.scores[f], box)
+            # 新しい ID が古い ID の消える少し前から出ている（重なり）
+            for g_f, g, ov in gaps[who]:
+                if ov and g_f - ov <= f < g_f:
+                    nxt = [tid for start, tid in ids[who] if start == g_f][0]
+                    ts.add(nxt, f, kp, s.scores[f], box)
+    return ts
+
+
+def test_stitch_handles_long_gaps_and_overlaps():
+    from dance_compare.pose.tracking import select_pair
+
+    # レビュー対象: 4 秒で 2 秒見失って ID 7 に、8 秒で ID 9 が少し重なって出てくる
+    ts = _tracks_with_switches([(1, 120, 7, 60, 0), (1, 240, 9, 0, 10)])
+    ref, user = select_pair(ts, (1, None, 0), (2, None, 0))
+    assert user.meta["track_ids"] == [2, 7, 9]
+    assert ref.meta["track_ids"] == [1]
+    assert np.isfinite(user.keypoints[-1, 5, 0])
+
+
+def test_stitch_does_not_take_the_other_persons_id():
+    from dance_compare.pose.tracking import select_pair
+
+    # お手本の ID 1 が 6 秒で途切れ、レビュー対象には同時刻に新しい ID 5 が振られる
+    ts = _tracks_with_switches([(1, 180, 5, 0, 0)])
+    keep = ts.present(1).copy()
+    keep[180:] = False
+    for arr in (ts.keypoints[1], ts.boxes[1]):
+        arr[~keep] = np.nan
+    ref, user = select_pair(ts, (1, None, 0), (2, None, 0))
+    assert 5 not in ref.meta["track_ids"]
+    assert user.meta["track_ids"] == [2, 5]
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
+def test_single_video_warns_when_range_is_cut_by_tracking(tmp_path):
+    from dance_compare.pipeline import Pick, analyze_single_video
+    from dance_compare.synth import write_synth_video
+
+    ts = _tracks_with_switches([])
+    for arr in (ts.keypoints[2], ts.boxes[2]):
+        arr[240:] = np.nan  # レビュー対象が 8 秒以降見つからない
+    video = str(tmp_path / "v.mp4")
+    write_synth_video(synth_dancer(duration=12), video, synth_beats(12))
+    res = analyze_single_video(video, Pick(1), Pick(2), tracks=ts, time_range=(1.0, 11.0))
+    assert any("レビュー対象は 0:08.0 以降を追跡できていません" in n for n in res.notes)

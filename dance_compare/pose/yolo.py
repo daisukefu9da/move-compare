@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import numpy as np
 
+import os
+
 from ..media.video import probe
 from .base import ProgressFn, TrackSet
+
+DEFAULT_TRACKER = os.path.join(os.path.dirname(__file__), "bytetrack_dance.yaml")
 
 
 class YoloPoseBackend:
     name = "yolo"
 
-    def __init__(self, model: str = "yolo11n-pose.pt", tracker: str = "bytetrack.yaml",
+    def __init__(self, model: str = "yolo11n-pose.pt", tracker: str = DEFAULT_TRACKER,
                  conf: float = 0.3, device: str | None = None, imgsz: int = 640):
         self.model_name = model
         self.tracker = tracker
@@ -25,7 +29,7 @@ class YoloPoseBackend:
 
     @property
     def cache_key(self) -> str:
-        return f"yolo-{self.model_name}-{self.tracker}-{self.conf}-{self.imgsz}"
+        return f"yolo-{self.model_name}-{os.path.basename(self.tracker)}-{self.conf}-{self.imgsz}"
 
     def track(self, video_path: str, progress: ProgressFn | None = None) -> TrackSet:
         try:
