@@ -93,6 +93,7 @@ def cmd_single(args):
         args.video, Pick(args.ref_id, _point(args.ref_point), args.frame),
         Pick(args.user_id, _point(args.user_point), args.frame), _config(args),
         backend=args.backend, mirror=args.mirror, time_range=(args.start, args.end),
+        auto_range=not args.no_auto_range,
         rhythm=_rhythm(args), use_cache=not args.no_cache, progress=_progress,
     )
     _finish(result, args)
@@ -192,8 +193,10 @@ def main(argv=None):
     p.add_argument("--ref-point")
     p.add_argument("--user-point")
     p.add_argument("--frame", type=int, default=0)
-    p.add_argument("--start", type=float)
-    p.add_argument("--end", type=float)
+    p.add_argument("--start", type=float, help="比較を始める時刻 [秒]（省略すると自動で推定）")
+    p.add_argument("--end", type=float, help="比較を終える時刻 [秒]（省略すると自動で推定）")
+    p.add_argument("--no-auto-range", action="store_true",
+                   help="二人の動きがそろっている区間の自動推定をしない（動画全体を比較）")
     p.set_defaults(func=cmd_single)
 
     p = sub.add_parser("people", help="動画に映っている人物と ID を画像で確認")

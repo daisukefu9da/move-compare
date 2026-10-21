@@ -56,6 +56,14 @@ class AnalysisConfig:
     landing_match_window_s: float = 0.4  # 手本の着地に対応するレビュー対象の着地を探す範囲 [秒]
     landing_threshold_ms: float = 80.0   # 着地のタイミング差の指摘しきい値
 
+    # --- 比較する区間の自動推定（1動画モード: 二人の動きがそろっている区間） ---
+    sync_window_s: float = 2.0         # 同期度を見る窓の長さ [秒]
+    sync_max_lag_s: float = 0.4        # 二人のタイミングのずれをどこまで許すか [秒]
+    sync_threshold: float = 0.45       # 同期度（0〜1）がこれ以上なら「そろっている」
+    sync_min_duration_s: float = 2.0   # そろった状態がこれだけ続いたら振付が始まったとみなす [秒]
+    sync_min_motion: float = 0.3       # これより動きが小さい区間は同期度を下げる [胴長/秒]
+    sync_relative_motion: float = 0.5  # 動画内の大きな動き（上位 20%）のこの割合より小さい動きも同期度を下げる
+
     # --- 音声による 2 動画の同期 ---
     audio_sync_min_confidence: float = 3.5  # 相関ピークの鋭さがこれ以上なら同期できたとみなす
     audio_sync_min_uniqueness: float = 0.15 # 2 番目の候補との差（小さいと拍単位でずれる恐れ）

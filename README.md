@@ -56,6 +56,12 @@ streamlit run app.py
 左のサイドバーでモード・拍の取り方・しきい値などを選び、動画をアップロード（またはパスを入力）して「解析する」。
 1動画モードでは「人物を検出」→ 画像を見て（`streamlit-image-coordinates` を入れていればクリックで）お手本とレビュー対象を選びます。
 
+**1動画モードの比較する区間**: 踊り始める前・踊り終えた後を比較に入れないよう、開始・終了を指定できます（指定した時刻のコマが表示されます）。
+空欄の側は、**二人の動きがそろっている区間**から自動で推定します。「自動で推定して欄に入れる」を押すと、同期度のグラフと推定結果が出るので、確認して必要なら書き換えてください。
+- 踊る前に各自でリズムを取っていても、動き方がバラバラなら振付とは区別できます
+- 二人がまったく同じやり方でリズムを取っている（同じように首と肩でノる等）と、振付と区別できず開始が早めに出ます
+- 「1エイト目の1」は、比較を始める時刻の直後の拍になります。ずれる場合はサイドバーで指定してください
+
 ### コマンドラインで使う
 
 ```bash
@@ -69,6 +75,7 @@ python -m dance_compare compare ref.mp4 me.mp4 --narrator gemini # Gemini で指
 python -m dance_compare people group.mp4 --out people.jpg
 python -m dance_compare single group.mp4 --ref-id 1 --user-id 3
 python -m dance_compare single group.mp4 --ref-point 420,300 --user-point 900,320 --frame 0
+python -m dance_compare single group.mp4 --ref-id 1 --user-id 3 --start 12.5          # 比較を始める時刻を指定
 
 # 推定済みの骨格 JSON どうしを比較（動画なし）
 python -m dance_compare poses out/ref_pose.json out/user_pose.json

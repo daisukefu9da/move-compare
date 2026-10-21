@@ -194,3 +194,39 @@ def write_synth_video(seq: PoseSequence, path: str, beats: np.ndarray | None = N
         proc.stdin.write(img.tobytes())
     proc.stdin.close()
     proc.wait()
+
+
+def add_groove(seq: PoseSequence, t0: float, t1: float, seed: int = 0, amp: float = 0.25,
+               bpm: float | None = None, style: int | None = None) -> PoseSequence:
+    """[t0, t1) を「振付の前に各自でリズムを取っている」動きに置き換える（区間推定のテスト用）.
+
+    bpm を指定すると、その拍に合わせて揺れる（二人とも同じ曲でノっている状況）。
+    style: 0 = 上下にバウンス, 1 = 左右に揺れる, 2 = 首と肩でノる（省略すると seed で決まる）。
+    """
+    rng = np.random.default_rng(seed)
+    kp = seq.keypoints.copy()
+    t = np.arange(len(seq)) / seq.fps
+    m = (t >= t0) & (t < t1)
+    if not m.any():
+        return seq
+    base = kp[np.argmax(m)].copy()
+    L = np.linalg.norm(base[KP["left_shoulder"]] - base[KP["left_hip"]])
+    kp[m] = base
+    tm = t[m]
+    if bpm is None:
+        f1, ph = rng.uniform(0.8, 2.2), rng.uniform(0, 6)
+        kp[m, :, 0] += (amp * L * np.sin(2 * np.pi * f1 * tm + ph))[:, None]
+        kp[m, :, 1] += (0.3 * amp * L * np.sin(2 * np.pi * rng.uniform(0.5, 1.5) * tm + ph))[:, None]
+    else:
+        beat = np.abs(np.sin(np.pi * bpm / 60 * tm))
+        style = int(rng.integers(0, 3)) if style is None else style
+        if style == 0:  # 上下にバウンス
+            kp[m, :, 1] += (amp * L * beat)[:, None]
+        elif style == 1:  # 左右に揺れる
+            kp[m, :, 0] += (amp * L * np.sin(np.pi * bpm / 60 * tm))[:, None]
+        else:  # 首と肩でノる
+            kp[m, :7, 1] += (amp * L * beat)[:, None]
+    arm = 0.15 * amp * L * np.sin(2 * np.pi * rng.uniform(0.7, 2.0) * tm + rng.uniform(0, 6))
+    kp[m, KP["left_wrist"], 1] += arm
+    kp[m, KP["right_wrist"], 0] += arm
+    return PoseSequence(kp, seq.scores.copy(), seq.fps, seq.width, seq.height, seq.t0, dict(seq.meta))

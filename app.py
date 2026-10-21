@@ -18,7 +18,7 @@ from dance_compare.core.skeleton import JA_NAMES
 from dance_compare.feedback import get_narrator
 from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
-                                    extract_tracks, save_outputs)
+                                    extract_tracks, save_outputs, suggest_range)
 
 UPLOAD_DIR = ".cache/uploads"
 OUT_DIR = "out"
@@ -69,7 +69,8 @@ with st.sidebar:
 
     st.subheader("時間合わせ")
     audio_sync = st.checkbox("音声で 2 本の動画を同期する", value=True, disabled=mode != "2動画モード")
-    open_ends = st.checkbox("レビュー対象の前後に余分な部分がある", value=False)
+    open_ends = st.checkbox("レビュー対象の前後に余分な部分がある", value=False, disabled=mode != "2動画モード",
+                            help="2動画モード用. レビュー対象の動画だけ撮影開始が早い・終了が遅い場合")
 
     st.subheader("指摘のしきい値")
     base = AnalysisConfig()
@@ -128,6 +129,67 @@ def people_image(video: str, backend: str, frame: int):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), {int(k): v.tolist() for k, v in boxes.items()}, f
 
 
+@st.cache_data(show_spinner=False)
+def frame_at(video: str, t: float):
+    """動画の t 秒のコマ（RGB）."""
+    import cv2
+
+    from dance_compare.media.video import probe, read_frame
+
+    info = probe(video)
+    img = read_frame(video, max(0, min(int(round(t * info.fps)), info.frames - 1)))
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
+def _auto_fill(video, backend, ref_id, user_id, f, cfg, mirror):
+    """「自動で推定」ボタン: 二人の動きがそろっている区間を推定して、開始・終了の欄に入れる."""
+    try:
+        curve = suggest_range(extract_tracks(video, backend), Pick(ref_id, frame=f), Pick(user_id, frame=f),
+                              cfg, mirror)
+    except Exception as e:  # 画面上にメッセージを出して続ける
+        st.session_state["sync_curve"] = (video, ref_id, user_id, None, str(e))
+        return
+    st.session_state["sync_curve"] = (video, ref_id, user_id, curve, None)
+    if curve.start is not None:
+        st.session_state["range_start"] = round(curve.start, 2)
+        st.session_state["range_end"] = round(curve.end, 2)
+
+
+def range_inputs(video, backend, ref_id, user_id, f, cfg, mirror):
+    """1動画モードの「比較する区間」の欄. (開始, 終了, 空欄を自動推定するか) を返す."""
+    st.markdown("#### 比較する区間")
+    st.caption("踊り始める前・踊り終えた後を比較に入れないための指定です。空欄の側は、二人の動きがそろっている所から自動で推定します。")
+    c1, c2, c3 = st.columns([2, 2, 2])
+    start = c1.number_input("開始 [秒]（空欄 = 自動）", min_value=0.0, value=None, step=0.1, key="range_start")
+    end = c2.number_input("終了 [秒]（空欄 = 自動）", min_value=0.0, value=None, step=0.1, key="range_end")
+    c3.write("")
+    c3.button("自動で推定して欄に入れる", on_click=_auto_fill, args=(video, backend, ref_id, user_id, f, cfg, mirror),
+              help="推定結果は欄に入るので、確認して必要なら書き換えてください")
+    auto_range = st.checkbox("空欄の側は自動で推定する（オフなら動画の最初・最後まで）", value=True)
+
+    sc = st.session_state.get("sync_curve")
+    if sc and sc[:3] == (video, ref_id, user_id):
+        curve, err = sc[3], sc[4]
+        if err:
+            st.error(f"推定できませんでした: {err}")
+        else:
+            if curve.start is None:
+                st.warning("二人の動きがそろっている区間が見つかりませんでした。開始・終了を手動で入れてください。")
+            else:
+                st.info(f"推定: {curve.start:.1f}秒 〜 {curve.end:.1f}秒")
+            df = pd.DataFrame({"同期度": curve.score, "しきい値": cfg.sync_threshold},
+                              index=np.round(curve.times, 2))
+            st.line_chart(df, height=160)
+            st.caption("同期度: 二人の動きがどれだけそろっているか（1 = 同じ動き）。しきい値を超えた状態が続く区間を振付とみなします。")
+    if start is not None or end is not None:
+        cols = st.columns(2)
+        if start is not None:
+            cols[0].image(frame_at(video, start), caption=f"開始 {start:.1f}秒", width="stretch")
+        if end is not None:
+            cols[1].image(frame_at(video, end), caption=f"終了 {end:.1f}秒", width="stretch")
+    return start, end, auto_range
+
+
 # ---------------------------------------------------------------------------
 # 入力
 # ---------------------------------------------------------------------------
@@ -172,7 +234,7 @@ else:
                     clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
                     st.info(f"クリックした人物: ID {clicked}")
             except ImportError:
-                st.image(img, caption=f"フレーム {f} の人物", use_container_width=True)
+                st.image(img, caption=f"フレーム {f} の人物", width="stretch")
             if len(ids) < 2:
                 st.error("二人以上が検出されていません。別のフレームを試してください。")
             else:
@@ -180,11 +242,13 @@ else:
                 ref_id = c1.selectbox("お手本", ids, index=0, format_func=lambda i: f"ID {i}")
                 user_id = c2.selectbox("レビュー対象", ids, index=ids.index(clicked) if clicked in ids else 1,
                                        format_func=lambda i: f"ID {i}")
+                start, end, auto_range = range_inputs(video, backend, ref_id, user_id, f, cfg, mirror)
                 if st.button("解析する", type="primary", disabled=ref_id == user_id):
                     prog = Progress()
                     with st.spinner("解析中…"):
                         result = analyze_single_video(video, Pick(ref_id, frame=f), Pick(user_id, frame=f), cfg,
-                                                      backend=backend, mirror=mirror, rhythm=rhythm, progress=prog)
+                                                      backend=backend, mirror=mirror, rhythm=rhythm, progress=prog,
+                                                      time_range=(start, end), auto_range=auto_range)
 
 if result is not None:
     narrator = get_narrator(narrator_name)
@@ -239,7 +303,7 @@ if "last" in st.session_state:
              "観点": r["aspect_ja"], "項目": r["kind_ja"], "部位": r["part_ja"], "ズレ量": r["value_text"],
              "優先度": r["severity"], "説明": r["description"]} for r in findings_rows(rep)]
     if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     c1, c2, c3 = st.columns(3)
     with open(paths["findings_csv"], "rb") as f:
         c3.download_button("findings.csv", f.read(), "findings.csv")

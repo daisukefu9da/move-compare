@@ -25,7 +25,7 @@ CASE_KEYS = {
     "name", "mode", "ref", "user", "video", "ref_pose", "user_pose", "mirror", "bpm", "first_one", "no_beats",
     "audio_sync", "ref_id", "user_id", "ref_point", "user_point", "frame", "ref_start", "ref_end",
     "user_start", "user_end", "start", "end", "backend", "config", "count_tolerance", "fail_on_unexpected",
-    "expect", "forbid", "note",
+    "expect", "forbid", "note", "auto_range",
 }
 
 
@@ -154,7 +154,7 @@ def run_case(case: Case, settings: dict, use_cache: bool = True):
     if p.get("mode", "two_videos") == "single":
         return analyze_single_video(path("video"), pick("ref"), pick("user"), cfg, backend=backend,
                                     mirror=p.get("mirror", False), time_range=(p.get("start"), p.get("end")),
-                                    rhythm=rhythm, use_cache=use_cache)
+                                    auto_range=p.get("auto_range", True), rhythm=rhythm, use_cache=use_cache)
     return analyze_two_videos(
         path("ref"), path("user"), cfg, backend=backend, mirror=p.get("mirror", False),
         ref_range=(p.get("ref_start"), p.get("ref_end")), user_range=(p.get("user_start"), p.get("user_end")),

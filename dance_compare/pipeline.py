@@ -10,8 +10,9 @@ import numpy as np
 
 from .core import compare
 from .core.config import AnalysisConfig
-from .core.counts import CountGrid
+from .core.counts import CountGrid, fmt_time
 from .core.report import Report
+from .core.segment import SyncCurve, sync_curve
 from .core.skeleton import PoseSequence
 from .feedback.table import markdown_table, write_csv
 from .media import audio as audio_mod
@@ -73,12 +74,14 @@ def _beats_for(video: str, start: float, rhythm: Rhythm, duration: float, notes:
     return beats, bpm
 
 
-def _first_one(beats, rhythm: Rhythm, start: float) -> float | None:
+def _first_one(beats, rhythm: Rhythm, start: float, margin_beats: float = 0.1) -> float | None:
+    """「1エイト目の1」の時刻. 指定が無ければ、start の margin_beats 拍手前以降で最初の拍."""
     if beats is None:
         return None
     if rhythm.first_one is not None:
         return rhythm.first_one
-    after = beats[beats >= start - 0.05]
+    interval = float(np.median(np.diff(beats))) if len(beats) > 1 else 0.5
+    after = beats[beats >= start - margin_beats * interval]
     return float(after[0]) if after.size else float(beats[0])
 
 
@@ -156,6 +159,30 @@ def analyze_two_videos(
     return AnalysisResult(report, ref_video, user_video, ref_seq, user_seq, notes)
 
 
+def _select_pair(tracks: TrackSet, ref_pick: Pick, user_pick: Pick) -> tuple[PoseSequence, PoseSequence, float, float]:
+    """1 本の動画から二人を選び、二人とも映っている区間 (開始, 終了) [秒] とともに返す."""
+    ref_seq = select_person(tracks, ref_pick.track_id, ref_pick.point, ref_pick.frame)
+    user_seq = select_person(tracks, user_pick.track_id, user_pick.point, user_pick.frame,
+                             exclude=set(ref_seq.meta["track_ids"]))
+    if set(ref_seq.meta["track_ids"]) & set(user_seq.meta["track_ids"]):
+        raise ValueError("お手本とレビュー対象に同じ人物が選ばれています")
+    both = np.isfinite(ref_seq.keypoints[:, 5, 0]) & np.isfinite(user_seq.keypoints[:, 5, 0])
+    present = np.where(both)[0]
+    if present.size < ref_seq.fps * 2:
+        raise ValueError("二人が同時に映っている区間が短すぎます")
+    return ref_seq, user_seq, present[0] / ref_seq.fps, (present[-1] + 1) / ref_seq.fps
+
+
+def suggest_range(tracks: TrackSet, ref_pick: Pick, user_pick: Pick, cfg: AnalysisConfig | None = None,
+                  mirror: bool = False) -> SyncCurve:
+    """二人の動きがそろっている区間（振付を踊っている区間）を推定する. 時刻は動画の先頭が 0."""
+    cfg = cfg or AnalysisConfig()
+    ref_seq, user_seq, s0, e0 = _select_pair(tracks, ref_pick, user_pick)
+    c = sync_curve(ref_seq.trim(s0, e0), user_seq.trim(s0, e0), cfg, mirror_ref=mirror)
+    return SyncCurve(c.times + s0, c.score, None if c.start is None else c.start + s0,
+                     None if c.end is None else c.end + s0)
+
+
 def analyze_single_video(
     video: str,
     ref_pick: Pick,
@@ -165,40 +192,54 @@ def analyze_single_video(
     backend: str = "yolo",
     mirror: bool = False,
     time_range: tuple[float | None, float | None] = (None, None),
+    auto_range: bool = True,
     rhythm: Rhythm | None = None,
     use_cache: bool = True,
     progress=None,
     tracks: TrackSet | None = None,
 ) -> AnalysisResult:
-    """1動画モード: 1 本の動画の中の「お手本」と「レビュー対象」を比較する."""
+    """1動画モード: 1 本の動画の中の「お手本」と「レビュー対象」を比較する.
+
+    time_range: 比較する区間 [秒]（指定した側が優先）。
+    auto_range: 指定が無い側は、二人の動きがそろっている区間から自動で推定する（踊る前・後を除く）。
+    """
     cfg = cfg or AnalysisConfig()
     rhythm = rhythm or Rhythm()
     notes: list[str] = []
     if backend == "mediapipe":
         raise ValueError("1動画モードは複数人を追跡できる yolo バックエンドを使ってください")
     tracks = tracks or extract_tracks(video, backend, use_cache, (lambda i, n: progress("骨格推定", i, n)) if progress else None)
-    ref_seq = select_person(tracks, ref_pick.track_id, ref_pick.point, ref_pick.frame)
-    user_seq = select_person(tracks, user_pick.track_id, user_pick.point, user_pick.frame,
-                             exclude=set(ref_seq.meta["track_ids"]))
-    if set(ref_seq.meta["track_ids"]) & set(user_seq.meta["track_ids"]):
-        raise ValueError("お手本とレビュー対象に同じ人物が選ばれています")
+    ref_seq, user_seq, s, e = _select_pair(tracks, ref_pick, user_pick)
 
-    # 二人とも映っている区間に絞る
-    both = np.isfinite(ref_seq.keypoints[:, 5, 0]) & np.isfinite(user_seq.keypoints[:, 5, 0])
-    present = np.where(both)[0]
-    if present.size < ref_seq.fps * 2:
-        raise ValueError("二人が同時に映っている区間が短すぎます")
-    s = max(time_range[0] or 0.0, present[0] / ref_seq.fps)
-    e = min(time_range[1] or ref_seq.duration, (present[-1] + 1) / ref_seq.fps)
+    start, end = time_range
+    sync = None
+    if auto_range and (start is None or end is None):
+        sync = suggest_range(tracks, ref_pick, user_pick, cfg, mirror)
+        if sync.start is None:
+            notes.append("二人の動きがそろっている区間が見つからなかったため、開始・終了の指定が無い側は"
+                         "動画の最初・最後までを比較しました")
+        else:
+            start = sync.start if start is None else start
+            end = sync.end if end is None else end
+    s = max(start if start is not None else s, s)
+    e = min(end if end is not None else e, e)
+    if e - s < 2.0:
+        raise ValueError(f"比較する区間が短すぎます（{fmt_time(s)}〜{fmt_time(e)}）")
+    if sync is not None and sync.start is not None:
+        notes.append(f"比較した区間: {fmt_time(s)}〜{fmt_time(e)}（二人の動きがそろっている所から自動で推定。"
+                     "ずれていれば開始・終了を指定してください）")
+    else:
+        notes.append(f"比較した区間: {fmt_time(s)}〜{fmt_time(e)}")
 
     beats, _ = _beats_for(video, s, rhythm, ref_seq.duration, notes)
     report = compare(
         ref_seq.trim(s, e), user_seq.trim(s, e), cfg.replace(dtw_band_s=cfg.dtw_band_s_single),
-        ref_beats=beats, user_beats=beats, first_one=_first_one(beats, rhythm, s),
+        ref_beats=beats, user_beats=beats, first_one=_first_one(beats, rhythm, s, margin_beats=0.4),  # 区間の推定誤差を見込む
         mirror_ref=mirror, synced=True,
     )
     report.meta.update(mode="single_video", backend=backend, notes=notes,
-                       ref_track_ids=ref_seq.meta["track_ids"], user_track_ids=user_seq.meta["track_ids"])
+                       ref_track_ids=ref_seq.meta["track_ids"], user_track_ids=user_seq.meta["track_ids"],
+                       sync={"times": sync.times[::3], "score": sync.score[::3]} if sync is not None else None)
     return AnalysisResult(report, video, video, ref_seq, user_seq, notes)
 
 
