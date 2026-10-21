@@ -203,7 +203,10 @@ if "last" in st.session_state:
     result, text, paths, err = st.session_state["last"]
     rep = result.report
     for n in result.notes:
-        st.info(n)
+        if "できません" in n or "付けられなかった" in n:
+            st.warning(n)
+        else:
+            st.info(n)
     if err:
         st.warning(err)
 

@@ -212,6 +212,18 @@ def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool =
         "user_pose": os.path.join(out_dir, "user_pose.json"),
         "findings_csv": os.path.join(out_dir, "findings.csv"),
     }
+    # 比較動画を先に作る（失敗しても解析結果は保存し、理由を処理メモに残す）
+    if render:
+        from .render.overlay import render_comparison
+
+        video = os.path.join(out_dir, "comparison.mp4")
+        try:
+            render_comparison(result.report, result.ref_video, result.user_video, result.ref_seq, result.user_seq,
+                              video, angle_threshold=result.report.meta["config"]["angle_threshold_deg"],
+                              progress=progress, notes=result.notes)
+            paths["video"] = video
+        except Exception as e:  # 動画が作れなくても解析結果は返す
+            result.notes.append(f"比較動画を作れませんでした: {e}")
     with open(paths["json"], "w", encoding="utf-8") as f:
         json.dump(result.report.to_dict(), f, ensure_ascii=False, indent=1)
     with open(paths["markdown"], "w", encoding="utf-8") as f:
@@ -222,11 +234,4 @@ def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool =
     write_csv(result.report, paths["findings_csv"])
     result.ref_seq.save_json(paths["ref_pose"])
     result.user_seq.save_json(paths["user_pose"])
-    if render:
-        from .render.overlay import render_comparison
-
-        paths["video"] = os.path.join(out_dir, "comparison.mp4")
-        render_comparison(result.report, result.ref_video, result.user_video, result.ref_seq, result.user_seq,
-                          paths["video"], angle_threshold=result.report.meta["config"]["angle_threshold_deg"],
-                          progress=progress)
     return paths

@@ -81,8 +81,9 @@ def render_comparison(
     panel_height: int = 480,
     angle_threshold: float = 20.0,
     progress=None,
+    notes: list[str] | None = None,
 ) -> str:
-    """比較動画を out_path に書き出す.
+    """比較動画を out_path に書き出す. 注意事項（音声なしにした等）は notes に追加する.
 
     ref_seq / user_seq は元動画のフレームと 1 対 1 に対応する（切り出し前の）骨格系列。
     """
@@ -146,6 +147,8 @@ def render_comparison(
         rr.close()
         ur.close()
         writer.close()
+    if notes is not None:
+        notes.extend(writer.notes)
     return out_path
 
 
@@ -176,39 +179,94 @@ def _put_texts(frame, texts, y0, legend, font):
     return cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
 
 
+def _ffmpeg_encoders() -> set[str]:
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    except OSError:
+        return set()
+    return {line.split()[1] for line in out.splitlines() if len(line.split()) > 1 and line.startswith(" V")}
+
+
+def _tail(path: str, n: int = 15) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-n:]).strip()
+    except OSError:
+        return ""
+
+
 class _Writer:
-    """ffmpeg があれば H.264 + 手本の音声で書き出す。無ければ OpenCV の mp4v（音声なし）."""
+    """比較動画の書き出し.
+
+    ffmpeg があれば、まず映像だけを H.264 で書き出し、そのあと手本の音声を付ける。
+    音声を付けられない場合（iPhone の空間オーディオなど ffmpeg が読めない形式）は音声なしにする。
+    ffmpeg が無ければ OpenCV の mp4v（音声なし）で書き出す。
+    """
 
     def __init__(self, path, fps, audio_src, start, duration):
         self.path, self.fps = path, fps
         self.audio = (audio_src, start, duration)
         self.proc = None
         self.cv = None
+        self.video_path = path + ".video.mp4"
+        self.log_path = path + ".ffmpeg.log"
+        self.notes: list[str] = []
 
-    def write(self, frame):
+    def _start(self, frame):
         import cv2
 
+        h, w = frame.shape[:2]
+        if shutil.which("ffmpeg") is None:
+            self.cv = cv2.VideoWriter(self.path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h))
+            self.notes.append("ffmpeg が無いため、比較動画は音声なしで書き出しました")
+            return
+        enc = _ffmpeg_encoders()
+        if "libx264" in enc:
+            codec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+        elif "h264_videotoolbox" in enc:  # Mac の標準ハードウェアエンコーダ
+            codec = ["-c:v", "h264_videotoolbox", "-b:v", "6M"]
+        else:
+            codec = ["-c:v", "mpeg4", "-q:v", "4"]
+        cmd = ["ffmpeg", "-y", "-v", "error",
+               "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}", "-r", f"{self.fps}", "-i", "-",
+               "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",  # H.264 は縦横が偶数でないと書き出せない
+               *codec, "-pix_fmt", "yuv420p", self.video_path]
+        self.log = open(self.log_path, "w")
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=self.log)
+
+    def write(self, frame):
         if self.proc is None and self.cv is None:
-            h, w = frame.shape[:2]
-            if shutil.which("ffmpeg"):
-                src, start, dur = self.audio
-                cmd = ["ffmpeg", "-y", "-v", "error",
-                       "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}", "-r", f"{self.fps}", "-i", "-",
-                       "-ss", f"{start}", "-t", f"{dur}", "-i", src,
-                       "-map", "0:v", "-map", "1:a?", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                       "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-shortest", self.path]
-                self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-            else:
-                self.cv = cv2.VideoWriter(self.path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h))
+            self._start(frame)
         if self.proc is not None:
-            self.proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+            try:
+                self.proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+            except (BrokenPipeError, OSError):
+                self.proc.wait()
+                self.proc = None  # close() で二重にエラーにしない
+                self.log.close()
+                raise RuntimeError("ffmpeg での動画の書き出しに失敗しました:\n" + _tail(self.log_path)) from None
         else:
             self.cv.write(frame)
 
     def close(self):
-        if self.proc is not None:
-            self.proc.stdin.close()
-            if self.proc.wait() != 0:
-                raise RuntimeError("ffmpeg での動画の書き出しに失敗しました")
         if self.cv is not None:
             self.cv.release()
+            return
+        if self.proc is None:
+            return
+        self.proc.stdin.close()
+        code = self.proc.wait()
+        self.log.close()
+        if code != 0:
+            raise RuntimeError("ffmpeg での動画の書き出しに失敗しました:\n" + _tail(self.log_path))
+        src, start, dur = self.audio
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", self.video_path, "-ss", f"{start}", "-t", f"{dur}", "-i", src,
+               "-map", "0:v", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-shortest", self.path]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            os.remove(self.video_path)
+        else:
+            os.replace(self.video_path, self.path)
+            msg = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else ""
+            self.notes.append(f"手本の音声を比較動画に付けられなかったため、音声なしで書き出しました（{msg}）")
+        os.remove(self.log_path)
