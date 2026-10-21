@@ -13,16 +13,30 @@
 
 ## セットアップ
 
-Python 3.11 以上と ffmpeg（音声の抽出と比較動画の書き出しに使用）が必要です。
+Python 3.11 以上、git、ffmpeg（音声の抽出と比較動画の書き出しに使用）が必要です。
+
+```bash
+# 最初の 1 回だけ: 好きな場所に取ってくる
+git clone -b claude/beautiful-knuth-hfbfqy https://github.com/daisukefu9da/move-compare.git
+# macOS: brew install ffmpeg / Windows: winget install ffmpeg
+```
+
+あとは **`start.command`（Mac）または `start.bat`（Windows）をダブルクリック** するだけです。起動のたびに次を自動で行います。
+
+1. `git pull` で GitHub の最新版を取り込む（オフラインなどで失敗しても、今の版で起動）
+2. 初回は仮想環境 `.venv` を作り、必要なパッケージをインストール（数分〜十数分）
+3. `requirements.txt` が更新されていれば、パッケージを入れ直す
+4. 画面（Streamlit）を起動
+
+> Mac で初回に「開発元を確認できない」と出たら、`start.command` を右クリック →「開く」で起動してください。
+> テスト動画はフォルダ内の `videos/` に置けば GitHub には送られません（取り込みの邪魔にもなりません）。
+
+手動で準備する場合:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-# macOS: brew install ffmpeg / Ubuntu: sudo apt install ffmpeg
 ```
-
-最小構成なら `numpy opencv-python-headless pillow` と、骨格推定に `ultralytics`（または `mediapipe`）があれば動きます。
-YOLO のモデル（`yolo11n-pose.pt`）と MediaPipe のモデルは初回実行時に自動でダウンロードされます。
 
 インストールの確認だけなら、合成した棒人間の動画で一連の処理を試せます（骨格推定は使いません）:
 
