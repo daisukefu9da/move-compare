@@ -31,17 +31,20 @@ def video_input(label: str, key: str) -> str | None:
     """アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
     c1, c2 = st.columns([3, 2])
     up = c1.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up")
-    path = c2.text_input("またはファイルのパス", key=f"{key}_path")
+    path = c2.text_input("またはファイルのパス", key=f"{key}_path",
+                         help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
     if up is not None:
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        data = up.getvalue()
-        name = hashlib.sha1(data).hexdigest()[:10] + "_" + up.name
-        p = os.path.join(UPLOAD_DIR, name)
+        buf = up.getbuffer()  # コピーせずに参照（大きい動画でメモリを二重に使わない）
+        head = hashlib.sha1(buf[: 1 << 20]).hexdigest()[:10]  # 先頭 1MB + サイズで同じ動画かを判定
+        p = os.path.join(UPLOAD_DIR, f"{head}_{len(buf)}_{up.name}")
         if not os.path.exists(p):
-            with open(p, "wb") as f:
-                f.write(data)
+            with open(p + ".part", "wb") as f:
+                f.write(buf)
+            os.replace(p + ".part", p)
         return p
     if path:
+        path = path.strip().strip('"').strip("'")  # ドラッグ＆ドロップや「パスをコピー」で付く引用符を除く
         if os.path.exists(path):
             return path
         st.error(f"ファイルが見つかりません: {path}")
