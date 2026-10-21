@@ -18,7 +18,7 @@ from ..core.preprocess import normalize
 from ..core.report import Report
 from ..core.skeleton import ANGLE_DEFS, ANGLE_NAMES, BONES, PoseSequence
 from ..feedback.phrases import describe
-from ..media.video import SequentialReader
+from ..media.video import SequentialReader, probe
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
@@ -78,7 +78,7 @@ def render_comparison(
     ref_seq: PoseSequence,
     user_seq: PoseSequence,
     out_path: str,
-    panel_height: int = 720,
+    panel_height: int = 480,
     angle_threshold: float = 20.0,
     progress=None,
     notes: list[str] | None = None,
@@ -107,12 +107,13 @@ def render_comparison(
     bar_h = max(120, H // 4)
     font = _font(max(16, H // 24))
     font_big = _font(max(20, H // 16))
-    # 骨格は分析用に間引いたフレームで数えている（ref_seq.fps）. 元の動画のコマはそれぞれの fps で読む
-    from ..media.video import probe
-
-    ref_vfps, user_vfps = probe(ref_video).fps, probe(user_video).fps
-    rr = SequentialReader(ref_video)
-    ur = SequentialReader(user_video)
+    # 映像は分析用の軽い動画（長辺 960px）から作る. 各画面は高さ H に縮小するので、4K の元動画を
+    # 1 コマずつ読むより大幅に速く、見た目の画質は変わらない（軽い動画が H より小さい場合だけ元の動画を使う）
+    ref_src, ref_k = _frame_source(ref_video, H)
+    user_src, user_k = _frame_source(user_video, H)
+    ref_vfps, user_vfps = probe(ref_src).fps, probe(user_src).fps
+    rr = SequentialReader(ref_src)
+    ur = SequentialReader(user_src)
     writer = _Writer(out_path, fps, ref_video, t0, t1 - t0)
     try:
         for k, t in enumerate(times):
@@ -128,9 +129,9 @@ def render_comparison(
                 if abs(np.interp(t, tl_t, angle_tl[n])) >= angle_threshold:
                     bad.add(ANGLE_DEFS[n][1])
             pr, sr = _fit(fr.copy(), H)
-            _draw_skeleton(pr, ref_seq.keypoints[fi_r], REF_COLOR, scale=sr)
+            _draw_skeleton(pr, ref_seq.keypoints[fi_r], REF_COLOR, scale=sr * ref_k)
             pu, su = _fit(fu.copy(), H)
-            _draw_skeleton(pu, user_seq.keypoints[fi_u], USER_COLOR, bad=bad, scale=su)
+            _draw_skeleton(pu, user_seq.keypoints[fi_u], USER_COLOR, bad=bad, scale=su * user_k)
             po = np.full((H, H, 3), 30, np.uint8)
             unit = H / 5.0
             to_px = np.array([unit, -unit])
@@ -154,6 +155,16 @@ def render_comparison(
     if notes is not None:
         notes.extend(writer.notes)
     return out_path
+
+
+def _frame_source(video: str, height: int) -> tuple[str, float]:
+    """比較動画の映像に使う動画と、元の動画の座標に掛ける倍率."""
+    from ..media.proxy import make_proxy
+
+    px = make_proxy(video)
+    if px.is_original or min(px.width / px.scale_x, px.height / px.scale_y) < height:
+        return video, 1.0
+    return px.path, 1.0 / px.scale_y
 
 
 def _fmt(t: float) -> str:
