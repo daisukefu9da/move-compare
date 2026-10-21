@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from dance_compare.core.config import AnalysisConfig
+from dance_compare.core.counts import fmt_time
 from dance_compare.core.report import ASPECTS
 from dance_compare.core.skeleton import JA_NAMES
 from dance_compare.feedback import get_narrator
@@ -130,6 +131,18 @@ def people_image(video: str, backend: str, frame: int):
 
 
 @st.cache_data(show_spinner=False)
+def id_spans(video: str, backend: str) -> dict[int, tuple[float, float]]:
+    """各 ID が映っている時間帯（最初と最後）[秒]."""
+    ts = extract_tracks(video, backend)
+    out = {}
+    for tid in ts.ids:
+        p = np.where(ts.present(tid))[0]
+        if p.size:
+            out[int(tid)] = (p[0] / ts.fps, (p[-1] + 1) / ts.fps)
+    return out
+
+
+@st.cache_data(show_spinner=False)
 def frame_at(video: str, t: float):
     """動画の t 秒のコマ（RGB）."""
     import cv2
@@ -213,15 +226,25 @@ if mode == "2動画モード":
 else:
     video = video_input("動画（二人以上が映っているもの）", "single")
     if video:
-        frame = st.number_input("人物を選ぶフレーム番号", 0, value=0, step=10)
         if st.button("人物を検出"):
             prog = Progress()
             with st.spinner("骨格推定中…"):
                 extract_tracks(video, backend, progress=lambda i, n: prog("骨格推定", i, n))
-            st.session_state["detected"] = (video, frame)
-        if st.session_state.get("detected") == (video, frame):
+            st.session_state["detected"] = video
+        if st.session_state.get("detected") == video:
+            from dance_compare.media.video import probe
+
+            info = probe(video)
+            pick_t = st.slider("人物を選ぶ時刻 [秒]（比較したい二人がはっきり映っている時刻にしてください）",
+                               0.0, max(info.duration, 0.1), 0.0, 0.5)
+            frame = int(round(pick_t * info.fps))
             img, boxes, f = people_image(video, backend, frame)
             ids = sorted(boxes)
+            spans = id_spans(video, backend)
+
+            def id_label(i):
+                a, b = spans.get(i, (0.0, 0.0))
+                return f"ID {i}（{fmt_time(a)}〜{fmt_time(b)} に映っている）"
             clicked = None
             try:  # クリックで選べるコンポーネントがあれば使う（pip install streamlit-image-coordinates）
                 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -234,14 +257,16 @@ else:
                     clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
                     st.info(f"クリックした人物: ID {clicked}")
             except ImportError:
-                st.image(img, caption=f"フレーム {f} の人物", width="stretch")
+                st.image(img, caption=f"{fmt_time(f / info.fps)} の人物", width="stretch")
             if len(ids) < 2:
-                st.error("二人以上が検出されていません。別のフレームを試してください。")
+                st.error("この時刻には二人以上が検出されていません。別の時刻を試してください。")
             else:
                 c1, c2 = st.columns(2)
-                ref_id = c1.selectbox("お手本", ids, index=0, format_func=lambda i: f"ID {i}")
+                ref_id = c1.selectbox("お手本", ids, index=0, format_func=id_label)
                 user_id = c2.selectbox("レビュー対象", ids, index=ids.index(clicked) if clicked in ids else 1,
-                                       format_func=lambda i: f"ID {i}")
+                                       format_func=id_label)
+                st.caption("「映っている」時間帯は、追跡が途切れる前のその ID だけの範囲です。"
+                           "解析では、途切れた後に別の ID になった同じ人物もつなげて比較します。")
                 start, end, auto_range = range_inputs(video, backend, ref_id, user_id, f, cfg, mirror)
                 if st.button("解析する", type="primary", disabled=ref_id == user_id):
                     prog = Progress()
