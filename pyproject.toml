@@ -1,0 +1,32 @@
+[project]
+name = "dance-compare"
+version = "0.1.0"
+description = "お手本とのダンス比較ツール（骨格推定 + DTW）"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+yolo = ["ultralytics>=8.3"]
+mediapipe = ["mediapipe>=0.10.14"]
+audio = ["librosa>=0.10"]
+ui = ["streamlit>=1.35", "pandas>=2", "streamlit-image-coordinates>=0.1.9"]
+dev = ["pytest>=8"]
+all = ["dance-compare[yolo,mediapipe,audio,ui]"]
+
+[project.scripts]
+dance-compare = "dance_compare.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dance_compare*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

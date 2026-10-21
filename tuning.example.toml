@@ -1,0 +1,20 @@
+# 解析パラメータの例. `--config tuning.toml` や UI の「設定ファイル」で読み込む.
+# 書かなかった項目は既定値（dance_compare/core/config.py）のまま.
+
+# 指摘のしきい値
+angle_threshold_deg = 20.0      # 関節角度の差がこれ以上で指摘
+timing_threshold_ms = 120.0     # 手本との早い/遅い
+rhythm_threshold_ms = 60.0      # 拍とのズレ
+amplitude_ratio_low = 0.75      # 振れ幅が手本の 75% 未満で「小さい」
+sharpness_ratio_low = 0.7
+
+# 評価の区切り（カウント数）
+window_counts = 2
+
+# 動きのアクセント: "peak"（速度のピーク）/ "hit"（急停止）
+accent_mode = "peak"
+beat_subdivision = 2            # 裏拍(&)も拍として扱う
+
+# 時間合わせ
+dtw_band_s = 3.0                # テンポのズレの許容 [秒]
+dtw_open_ends = false

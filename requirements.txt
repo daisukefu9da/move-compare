@@ -1,0 +1,15 @@
+# 必須
+numpy>=1.26
+opencv-python-headless>=4.8
+pillow>=10
+# 骨格推定（どちらか、または両方）
+ultralytics>=8.3        # YOLO-pose: 複数人の追跡（1動画モードに必要）。AGPL-3.0
+mediapipe>=0.10.14      # 1 人用。Apache-2.0
+# 拍検出（無くても numpy の簡易実装で動く）
+librosa>=0.10
+# UI
+streamlit>=1.35
+pandas>=2
+streamlit-image-coordinates>=0.1.9   # 1動画モードで人物をクリックで選ぶ（任意）
+# テスト
+pytest>=8
