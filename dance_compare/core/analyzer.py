@@ -97,15 +97,72 @@ def _abruptness(accel: np.ndarray, speed: np.ndarray) -> float:
     return float(np.percentile(accel, 90)) / v if v > 1e-6 else float("nan")
 
 
-def _exp_score(x: float, scale: float) -> float | None:
-    if x is None or not np.isfinite(x):
-        return None
-    return float(100 * np.exp(-abs(x) / scale))
+def grade(excess, full_ratio: float = 0.5) -> np.ndarray:
+    """ズレ（しきい値の何倍か）-> 点数.
+
+    しきい値の full_ratio 倍以下 = 100, しきい値 = 80, 2 倍 = 50, 3 倍 = 25, 6 倍以上 = 0。
+    指摘が出ない程度のズレなら 80 点以上になり、しきい値を緩めると点数も上がる。
+    """
+    full = min(full_ratio, 0.95)
+    return np.interp(np.abs(excess), [0, full, 1, 2, 3, 6], [100, 100, 80, 50, 25, 0])
 
 
-def _mean_or_none(xs) -> float | None:
-    xs = [x for x in xs if x is not None]
-    return float(np.mean(xs)) if xs else None
+def _worst_and_mean(points: np.ndarray) -> float:
+    """区間内の複数の部位の点数をまとめる. 1 か所でも大きくずれていれば区間の点が下がるよう、最低点も半分入れる."""
+    return float(0.5 * points.min() + 0.5 * points.mean())
+
+
+def _scores(windows: list[dict], rhythm: dict, cfg: AnalysisConfig) -> dict:
+    """観点ごとのスコア. 区間ごとの一貫したズレ（指摘と同じ単位）から計算する.
+
+    1 コマごとの角度などは骨格推定のぶれを含むので、区間で平均した値を使う。
+    """
+    def g(e):
+        return grade(e, cfg.score_full_ratio)
+
+    def mean(xs):
+        xs = [x for x in xs if x is not None and np.isfinite(x)]
+        return float(np.mean(xs)) if xs else None
+
+    shape, timing, amp, sharp, level, steps = [], [], [], [], [], []
+    for w in windows:
+        shape.append(_worst_and_mean(g(np.array(list(w["angle_diff"].values())) / cfg.angle_threshold_deg)))
+        if w["ref_motion"] >= cfg.min_motion_for_timing and not w["edge"]:
+            timing.append(float(g(w["timing_ms"] / cfg.timing_threshold_ms)))
+        if not w["partial"]:
+            amp_log = -np.log(cfg.amplitude_low)
+            a = [np.log(r) / amp_log for r in w["amplitude_ratio"].values() if np.isfinite(r) and r > 0]
+            if a:
+                amp.append(_worst_and_mean(g(np.array(a))))
+            sh_log = -np.log(cfg.sharpness_low)
+            # 手本よりキレがある分は減点しない
+            k = [max(0.0, -np.log(r)) / sh_log for r in w["sharpness_ratio"].values() if np.isfinite(r) and r > 0]
+            if k:
+                sharp.append(_worst_and_mean(g(np.array(k))))
+        level.append(float(np.mean(g(np.array([w["level_diff"] / cfg.level_threshold,
+                                                 w["facing_diff"] / cfg.facing_threshold_deg,
+                                                 w["lean_diff"] / cfg.lean_threshold_deg])))))
+        st = [w["stance_diff"] / cfg.stance_threshold, w["travel_diff"] / cfg.travel_threshold]
+        if w.get("landing_ms") is not None:
+            st.append(w["landing_ms"] / cfg.landing_threshold_ms)
+        steps.append(float(np.mean(g(np.array(st)))))
+
+    scores = {"shape": mean(shape), "timing": mean(timing), "amplitude": mean(amp),
+              "sharpness": mean(sharp), "level": mean(level), "steps": mean(steps)}
+    # リズム: 手本との「拍の取り方」の違い（平均のズレの差と、ばらつきが手本より大きい分）
+    u, r = rhythm.get("user", {}), rhythm.get("ref", {})
+    if u.get("count", 0) >= 3:
+        if r.get("count", 0) >= 3:
+            e = [(u["mean_ms"] - r["mean_ms"]) / cfg.rhythm_threshold_ms,
+                 max(0.0, u["std_ms"] - r["std_ms"]) / (2 * cfg.rhythm_threshold_ms)]
+        else:
+            e = [(u["mean_ms"] - rhythm.get("bias_ms", 0.0)) / cfg.rhythm_threshold_ms]
+        scores["rhythm"] = float(np.mean(g(np.array(e))))
+    else:
+        scores["rhythm"] = None
+    valid = [v for v in scores.values() if v is not None]
+    scores["overall"] = float(np.mean(valid)) if valid else None
+    return scores
 
 
 def _nanmean(x) -> float:
@@ -152,7 +209,9 @@ def compare(
 
     # 手本フレームごとの、対応するレビュー対象の値
     angle_diff = _sample(U.angles, warp) - R.angles
-    level_diff = _sample(U.level, warp) - R.level
+    # 腰の高さは各自の普段の高さ（中央値）からの沈み込みで比べる. そのまま比べると、脚と胴の長さの比率
+    # （体型）や撮影位置の違いが「手本より低い/高い」と出てしまうため
+    level_diff = (_sample(U.level, warp) - np.median(U.level)) - (R.level - np.median(R.level))
     facing_diff = _sample(U.facing, warp) - R.facing
     lean_diff = _sample(U.lean, warp) - R.lean
     stance_diff = _sample(U.stance, warp) - R.stance
@@ -261,35 +320,7 @@ def compare(
     findings = _window_findings(windows, cfg, grid, rhythm.get("bias_ms", 0.0))
     tendencies = _tendencies(windows, rhythm, timing_dev, synced, cfg)
 
-    # --- スコア ---
-    def logs(key):
-        vals = [np.log(v) for w in windows for v in w[key].values() if np.isfinite(v) and v > 0]
-        return float(np.mean(np.abs(vals))) if vals else float("nan")
-
-    scores = {
-        "shape": _exp_score(_nanmean(np.abs(angle_diff)), cfg.score_scale_angle_deg),
-        "timing": _exp_score(_nanmean(np.abs(timing_dev)), cfg.score_scale_timing_ms),
-        "amplitude": _exp_score(logs("amplitude_ratio"), cfg.score_scale_amplitude),
-        "sharpness": _exp_score(logs("sharpness_ratio"), cfg.score_scale_sharpness),
-    }
-    lv = [_exp_score(_nanmean(np.abs(level_diff)), cfg.score_scale_level),
-          _exp_score(_nanmean(np.abs(facing_diff)), cfg.facing_threshold_deg * 2),
-          _exp_score(_nanmean(np.abs(lean_diff)), cfg.lean_threshold_deg * 2)]
-    scores["level"] = _mean_or_none(lv)
-    st = [_exp_score(_nanmean(np.abs(stance_diff)), cfg.stance_threshold * 2),
-          _exp_score(_nanmean([w["travel_diff"] for w in windows]), cfg.travel_threshold * 2)]
-    lvr = rhythm["landing_vs_ref"]
-    if lvr.get("count", 0) >= 3:
-        st.append(_exp_score(abs(lvr["mean_ms"]) + lvr["std_ms"] * 0.5, cfg.score_scale_timing_ms))
-    scores["steps"] = _mean_or_none(st)
-    if "user" in rhythm and rhythm["user"].get("count", 0) >= 3:
-        u = rhythm["user"]
-        scores["rhythm"] = _exp_score(abs(u["mean_ms"] - rhythm["bias_ms"]) + u["std_ms"] * 0.5,
-                                      cfg.score_scale_rhythm_ms)
-    else:
-        scores["rhythm"] = None
-    valid = [v for v in scores.values() if v is not None]
-    scores["overall"] = float(np.mean(valid)) if valid else None
+    scores = _scores(windows, rhythm, cfg)
 
     step = max(1, int(round(fps / 10)))  # グラフ用に 10fps 程度へ間引く
     timeline = {
@@ -348,16 +379,16 @@ def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid |
         for name, r in w["amplitude_ratio"].items():
             if not np.isfinite(r) or w["partial"]:
                 continue
-            if r < cfg.amplitude_ratio_low:
+            if r < cfg.amplitude_low:
                 add(w, "amplitude", "amplitude", "smaller", r, "ratio",
-                    np.log(r) / np.log(cfg.amplitude_ratio_low), part=name)
-            elif r > cfg.amplitude_ratio_high:
+                    np.log(r) / np.log(cfg.amplitude_low), part=name)
+            elif r > cfg.amplitude_high:
                 add(w, "amplitude", "amplitude", "larger", r, "ratio",
-                    np.log(r) / np.log(cfg.amplitude_ratio_high), part=name)
+                    np.log(r) / np.log(cfg.amplitude_high), part=name)
         for name, r in w["sharpness_ratio"].items():
-            if np.isfinite(r) and r < cfg.sharpness_ratio_low and not w["partial"]:
+            if np.isfinite(r) and r < cfg.sharpness_low and not w["partial"]:
                 add(w, "sharpness", "sharpness", "weaker", r, "ratio",
-                    np.log(r) / np.log(cfg.sharpness_ratio_low), part=name)
+                    np.log(r) / np.log(cfg.sharpness_low), part=name)
         lm = w.get("landing_ms")
         if lm is not None and abs(lm) >= cfg.landing_threshold_ms:
             feet = w.get("landing_feet") or []
@@ -435,21 +466,17 @@ def _tendencies(windows, rhythm, timing_dev, synced, cfg) -> list[Finding]:
         vals = [w["amplitude_ratio"][name] for w in windows if np.isfinite(w["amplitude_ratio"][name])]
         if len(vals) >= 3:
             r = float(np.exp(np.mean(np.log(vals))))
-            if r < cfg.amplitude_ratio_low * 1.1:
+            if r < cfg.amplitude_low:
                 out.append(Finding("amplitude", "amplitude", "smaller", r, "ratio",
-                                   np.log(r) / np.log(cfg.amplitude_ratio_low) * 1.5, part=name))
-            elif r > cfg.amplitude_ratio_high / 1.1:
+                                   np.log(r) / np.log(cfg.amplitude_low) * 1.5, part=name))
+            elif r > cfg.amplitude_high:
                 out.append(Finding("amplitude", "amplitude", "larger", r, "ratio",
-                                   np.log(r) / np.log(cfg.amplitude_ratio_high) * 1.5, part=name))
+                                   np.log(r) / np.log(cfg.amplitude_high) * 1.5, part=name))
         vals = [w["sharpness_ratio"][name] for w in windows if np.isfinite(w["sharpness_ratio"][name])]
         if len(vals) >= 3:
             r = float(np.exp(np.mean(np.log(np.maximum(vals, 1e-6)))))
-            if r < cfg.sharpness_ratio_low * 1.1:
+            if r < cfg.sharpness_low:
                 out.append(Finding("sharpness", "sharpness", "weaker", r, "ratio",
-                                   np.log(r) / np.log(cfg.sharpness_ratio_low) * 1.5, part=name))
-    lvl = float(np.mean([w["level_diff"] for w in windows])) if windows else 0.0
-    if abs(lvl) >= cfg.level_threshold * 0.8:
-        out.append(Finding("level", "level", "higher" if lvl > 0 else "lower", lvl, "torso",
-                           abs(lvl) / cfg.level_threshold * 1.5))
+                                   np.log(r) / np.log(cfg.sharpness_low) * 1.5, part=name))
     out.sort(key=lambda f: -f.severity)
     return out

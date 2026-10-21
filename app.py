@@ -79,13 +79,31 @@ with st.sidebar:
     if cfg_file is not None:
         import tomllib
         base = AnalysisConfig.from_dict(tomllib.loads(cfg_file.getvalue().decode()))
-    angle_thr = st.slider("関節角度の差 [°]", 5.0, 60.0, base.angle_threshold_deg, 1.0)
-    timing_thr = st.slider("手本とのタイミング差 [ms]", 30.0, 400.0, base.timing_threshold_ms, 10.0)
-    rhythm_thr = st.slider("拍とのズレ [ms]", 20.0, 200.0, base.rhythm_threshold_ms, 5.0)
-    amp_low = st.slider("動きが小さいとみなす比率", 0.3, 0.95, base.amplitude_ratio_low, 0.05)
-    window_counts = st.select_slider("評価の区切り [カウント]", [1, 2, 4, 8], base.window_counts)
-    accent_mode = st.radio("動きのアクセント", ["peak", "hit"], index=0 if base.accent_mode == "peak" else 1,
-                           format_func=lambda m: "速度のピーク" if m == "peak" else "急停止（ヒット）")
+    st.caption("どの項目も、**大きくするほど判定が緩く**なり（指摘が減り）、スコアも上がります。"
+               "しきい値の半分以下のズレは減点しません。")
+    angle_thr = st.slider("関節角度の差 [°]", 5.0, 60.0, base.angle_threshold_deg, 1.0,
+                          help="手本との関節の角度の差がこれ以上なら指摘")
+    timing_thr = st.slider("手本とのタイミング差 [ms]", 30.0, 400.0, base.timing_threshold_ms, 10.0,
+                           help="同じ動きを手本より早く/遅くやっている時間がこれ以上なら指摘")
+    amp_tol = st.slider("動きの大きさの差 [%]", 5, 60, int(round(base.amplitude_tolerance * 100)), 5,
+                        help="手先・足先の振れ幅が手本とこれ以上違えば指摘（25% なら手本の 75% 未満で「小さい」）")
+    rhythm_thr = st.slider("拍とのズレ [ms]", 20.0, 200.0, base.rhythm_threshold_ms, 5.0,
+                           help="音に対するノリ方が手本とこれ以上違えば指摘")
+    with st.expander("高度な設定"):
+        sharp_tol = st.slider("キレの差 [%]", 10, 70, int(round(base.sharpness_tolerance * 100)), 5,
+                              help="加速・減速の鋭さが手本よりこれ以上弱ければ指摘")
+        level_thr = st.slider("腰の高さ（沈み込み）の差 [胴の長さの%]", 5, 50, int(round(base.level_threshold * 100)), 1,
+                              help="各自の普段の高さからの沈み込み方を比べる")
+        facing_thr = st.slider("体の向きの差 [°]", 10.0, 90.0, base.facing_threshold_deg, 5.0)
+        lean_thr = st.slider("上体の傾きの差 [°]", 5.0, 45.0, base.lean_threshold_deg, 1.0)
+        stance_thr = st.slider("足幅の差 [胴の長さの%]", 10, 80, int(round(base.stance_threshold * 100)), 5)
+        travel_thr = st.slider("移動量の差 [胴の長さの%]", 10, 150, int(round(base.travel_threshold * 100)), 5)
+        landing_thr = st.slider("着地タイミングの差 [ms]", 30.0, 300.0, base.landing_threshold_ms, 10.0)
+        full_ratio = st.slider("減点しないズレの範囲 [しきい値に対する割合]", 0.0, 0.9, base.score_full_ratio, 0.05,
+                               help="測定誤差を見込んで、しきい値のこの割合以下のズレは減点しない")
+        window_counts = st.select_slider("評価の区切り [カウント]", [1, 2, 4, 8], base.window_counts)
+        accent_mode = st.radio("動きのアクセント", ["peak", "hit"], index=0 if base.accent_mode == "peak" else 1,
+                               format_func=lambda m: "速度のピーク" if m == "peak" else "急停止（ヒット）")
 
     st.subheader("言語化")
     narrator_name = st.radio("指摘文", ["rule", "gemini"],
@@ -98,8 +116,11 @@ with st.sidebar:
     make_video = st.checkbox("比較動画を作る", value=True)
 
 cfg = base.replace(angle_threshold_deg=angle_thr, timing_threshold_ms=timing_thr, rhythm_threshold_ms=rhythm_thr,
-                   amplitude_ratio_low=amp_low, window_counts=window_counts, accent_mode=accent_mode,
-                   dtw_open_ends=open_ends)
+                   amplitude_tolerance=amp_tol / 100, sharpness_tolerance=sharp_tol / 100,
+                   level_threshold=level_thr / 100, facing_threshold_deg=facing_thr, lean_threshold_deg=lean_thr,
+                   stance_threshold=stance_thr / 100, travel_threshold=travel_thr / 100,
+                   landing_threshold_ms=landing_thr, score_full_ratio=full_ratio,
+                   window_counts=window_counts, accent_mode=accent_mode, dtw_open_ends=open_ends)
 rhythm = Rhythm(bpm=bpm, first_one=first_one or None, detect=beat_mode != "使わない")
 
 

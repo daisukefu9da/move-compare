@@ -162,3 +162,31 @@ def test_count_grid_first_one_outside_detected_beats():
     assert g.label(0.5) == "1エイト目の1カウント"
     assert g.label(1.0) == "1エイト目の2カウント"
     assert abs(g.first_one - 0.5) < 1e-9
+
+
+def test_body_proportions_do_not_count_as_level_difference():
+    # 脚が長い（胴に対する脚の比率が違う）人でも「腰の位置が高い」とは判定しない
+    user = synth_dancer(noise=1.0)
+    kp = user.keypoints
+    for j in (13, 14, 15, 16):
+        kp[:, j, 1] += (kp[:, j, 1] - kp[:, 11, 1]) * 0.25
+    r = run(user)
+    assert not [f for f in r.findings + r.tendencies if f.kind == "level"]
+    assert r.scores["level"] > 95
+
+
+def test_scores_follow_thresholds():
+    from dance_compare.core.analyzer import grade
+
+    assert grade(0.3) == 100 and grade(1.0) == 80 and grade(2.0) == 50 and grade(6.0) == 0
+    user = synth_dancer(amplitude=0.6, noise=1.0)
+    strict = run(user)
+    loose = compare(synth_dancer(), user, AnalysisConfig(amplitude_tolerance=0.45), ref_beats=BEATS,
+                    user_beats=BEATS, synced=True)
+    assert loose.scores["amplitude"] > strict.scores["amplitude"] + 10
+    assert run(synth_dancer(noise=2.0)).scores["overall"] > 98
+
+
+def test_old_config_keys_are_converted():
+    c = AnalysisConfig.from_dict({"amplitude_ratio_low": 0.8, "sharpness_ratio_low": 0.6, "score_scale_angle_deg": 30})
+    assert abs(c.amplitude_tolerance - 0.2) < 1e-9 and abs(c.sharpness_tolerance - 0.4) < 1e-9

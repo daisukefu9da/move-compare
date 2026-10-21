@@ -35,10 +35,9 @@ class AnalysisConfig:
     min_motion_for_timing: float = 0.3     # 手本の動きがこれより遅い区間はタイミングを評価しない [胴長/秒]
     edge_margin_s: float = 0.5             # 先頭・末尾のこの範囲にかかる区間はタイミングを評価しない
     rhythm_threshold_ms: float = 60.0      # 拍に対する平均的なズレ
-    amplitude_ratio_low: float = 0.75      # 振れ幅が手本の何倍未満なら「小さい」
-    amplitude_ratio_high: float = 1.35     # 何倍超なら「大きい」
-    sharpness_ratio_low: float = 0.7       # 加速度が手本の何倍未満なら「キレ不足」
-    level_threshold: float = 0.12          # 腰の高さの差（胴の長さ比）
+    amplitude_tolerance: float = 0.25      # 振れ幅の差をどこまで許すか（0.25 なら手本の 75%〜133% は OK）
+    sharpness_tolerance: float = 0.3       # キレ（加速・減速の鋭さ）が手本より何割弱くても許すか
+    level_threshold: float = 0.15          # 腰の高さの差（胴の長さ比. 各自の普段の高さからの沈み込みで比べる）
     facing_threshold_deg: float = 35.0     # 体の向きの差
     lean_threshold_deg: float = 15.0       # 上体の傾きの差
     stance_threshold: float = 0.25         # 足幅の差（胴の長さ比）
@@ -68,13 +67,10 @@ class AnalysisConfig:
     audio_sync_min_confidence: float = 3.5  # 相関ピークの鋭さがこれ以上なら同期できたとみなす
     audio_sync_min_uniqueness: float = 0.15 # 2 番目の候補との差（小さいと拍単位でずれる恐れ）
 
-    # --- スコア（差がこの値のとき約 37 点になる指数関数） ---
-    score_scale_angle_deg: float = 30.0
-    score_scale_timing_ms: float = 200.0
-    score_scale_rhythm_ms: float = 120.0
-    score_scale_amplitude: float = 0.35
-    score_scale_sharpness: float = 0.5
-    score_scale_level: float = 0.25
+    # --- スコア ---
+    # 各項目のズレを「指摘のしきい値の何倍か」で表し、次の対応で点数にする（しきい値と連動）:
+    #   しきい値の半分以下 = 100 点, しきい値ちょうど = 80 点, 2 倍 = 50 点, 3 倍 = 25 点, 6 倍以上 = 0 点
+    score_full_ratio: float = 0.5      # しきい値のこの割合以下のズレは減点しない（測定誤差の分）
 
     @classmethod
     def load(cls, path: str) -> "AnalysisConfig":
@@ -84,6 +80,15 @@ class AnalysisConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AnalysisConfig":
+        data = dict(data)
+        # 古い項目名を読み替える
+        if "amplitude_ratio_low" in data:
+            data.setdefault("amplitude_tolerance", 1 - data.pop("amplitude_ratio_low"))
+        if "sharpness_ratio_low" in data:
+            data.setdefault("sharpness_tolerance", 1 - data.pop("sharpness_ratio_low"))
+        for old in ("amplitude_ratio_high", "score_scale_angle_deg", "score_scale_timing_ms", "score_scale_rhythm_ms",
+                    "score_scale_amplitude", "score_scale_sharpness", "score_scale_level"):
+            data.pop(old, None)
         names = {f.name for f in fields(cls)}
         unknown = set(data) - names
         if unknown:
@@ -97,3 +102,16 @@ class AnalysisConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    # 振れ幅・キレの比のしきい値
+    @property
+    def amplitude_low(self) -> float:
+        return 1.0 - self.amplitude_tolerance
+
+    @property
+    def amplitude_high(self) -> float:
+        return 1.0 / (1.0 - self.amplitude_tolerance)
+
+    @property
+    def sharpness_low(self) -> float:
+        return 1.0 - self.sharpness_tolerance
