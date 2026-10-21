@@ -175,6 +175,9 @@ def _tracking_notes(ref_seq: PoseSequence, user_seq: PoseSequence, want: tuple[f
     """指定した区間より短くなった理由（どちらの追跡が途切れたか）."""
     out = []
     fps = ref_seq.fps
+    if want[1] is not None and want[1] > ref_seq.duration + 0.2:
+        out.append(f"動画は {fmt_time(ref_seq.duration)} までです")
+        want = (want[0], ref_seq.duration)
     for name, seq in (("お手本", ref_seq), ("レビュー対象", user_seq)):
         p = np.where(np.isfinite(seq.keypoints[:, 5, 0]))[0]
         first, last = p[0] / fps, (p[-1] + 1) / fps
@@ -182,6 +185,8 @@ def _tracking_notes(ref_seq: PoseSequence, user_seq: PoseSequence, want: tuple[f
             out.append(f"{name}は {fmt_time(first)} より前を追跡できていません")
         if want[1] is not None and last < want[1] - 0.2:
             out.append(f"{name}は {fmt_time(last)} 以降を追跡できていません")
+    if out and want[1] is not None and got[1] >= want[1] - 0.2 and len(out) == 1:
+        return [f"比較を終える時刻が動画の長さを超えています（{out[0]}）"]
     if out:
         return [f"指定した区間（{fmt_time(want[0] or 0)}〜{fmt_time(want[1]) if want[1] else '最後'}）のうち、"
                 f"{fmt_time(got[0])}〜{fmt_time(got[1])} しか比較できませんでした: " + "、".join(out)
