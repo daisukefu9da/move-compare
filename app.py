@@ -87,8 +87,6 @@ with st.sidebar:
                            help="同じ動きを手本より早く/遅くやっている時間がこれ以上なら指摘")
     amp_tol = st.slider("動きの大きさの差 [%]", 5, 60, int(round(base.amplitude_tolerance * 100)), 5,
                         help="手先・足先の振れ幅が手本とこれ以上違えば指摘（25% なら手本の 75% 未満で「小さい」）")
-    rhythm_thr = st.slider("拍とのズレ [ms]", 20.0, 200.0, base.rhythm_threshold_ms, 5.0,
-                           help="音に対するノリ方が手本とこれ以上違えば指摘")
     with st.expander("高度な設定"):
         sharp_tol = st.slider("キレの差 [%]", 10, 70, int(round(base.sharpness_tolerance * 100)), 5,
                               help="加速・減速の鋭さが手本よりこれ以上弱ければ指摘")
@@ -115,7 +113,7 @@ with st.sidebar:
             st.warning("環境変数 GEMINI_API_KEY が未設定のため、ルールベースの文章になります。")
     make_video = st.checkbox("比較動画を作る", value=True)
 
-cfg = base.replace(angle_threshold_deg=angle_thr, timing_threshold_ms=timing_thr, rhythm_threshold_ms=rhythm_thr,
+cfg = base.replace(angle_threshold_deg=angle_thr, timing_threshold_ms=timing_thr,
                    amplitude_tolerance=amp_tol / 100, sharpness_tolerance=sharp_tol / 100,
                    level_threshold=level_thr / 100, facing_threshold_deg=facing_thr, lean_threshold_deg=lean_thr,
                    stance_threshold=stance_thr / 100, travel_threshold=travel_thr / 100,

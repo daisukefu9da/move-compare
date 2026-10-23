@@ -149,17 +149,8 @@ def _scores(windows: list[dict], rhythm: dict, cfg: AnalysisConfig) -> dict:
 
     scores = {"shape": mean(shape), "timing": mean(timing), "amplitude": mean(amp),
               "sharpness": mean(sharp), "level": mean(level), "steps": mean(steps)}
-    # リズム: 手本との「拍の取り方」の違い（平均のズレの差と、ばらつきが手本より大きい分）
-    u, r = rhythm.get("user", {}), rhythm.get("ref", {})
-    if u.get("count", 0) >= 3:
-        if r.get("count", 0) >= 3:
-            e = [(u["mean_ms"] - r["mean_ms"]) / cfg.rhythm_threshold_ms,
-                 max(0.0, u["std_ms"] - r["std_ms"]) / (2 * cfg.rhythm_threshold_ms)]
-        else:
-            e = [(u["mean_ms"] - rhythm.get("bias_ms", 0.0)) / cfg.rhythm_threshold_ms]
-        scores["rhythm"] = float(np.mean(g(np.array(e))))
-    else:
-        scores["rhythm"] = None
+    # リズム（拍とのズレ）はスコアに入れない. 遅れ・走りは「手本とのタイミング」で同じ動きどうしを
+    # 直接比べて評価する（拍の検出精度に左右されず、部分的な遅れも区間ごとに拾えるため）
     valid = [v for v in scores.values() if v is not None]
     scores["overall"] = float(np.mean(valid)) if valid else None
     return scores
@@ -317,7 +308,7 @@ def compare(
         w["rhythm_ms"] = float(np.mean(user_acc_off[in_w])) if in_w.sum() >= 2 else None
         windows.append(w)
 
-    findings = _window_findings(windows, cfg, grid, rhythm.get("bias_ms", 0.0))
+    findings = _window_findings(windows, cfg, grid)
     tendencies = _tendencies(windows, rhythm, timing_dev, synced, cfg)
 
     scores = _scores(windows, rhythm, cfg)
@@ -352,9 +343,8 @@ def compare(
 # 指摘の抽出
 # ---------------------------------------------------------------------------
 
-def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid | None,
-                     bias: float = 0.0) -> list[Finding]:
-    """区間ごとの指摘. bias は拍に対する手本のズレ [ms]（拍検出の癖や曲のノリの分を差し引く基準）."""
+def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid | None) -> list[Finding]:
+    """区間ごとの指摘."""
     raw: list[Finding] = []
 
     def add(w, aspect, kind, direction, value, unit, sev, part=None, **extra):
@@ -372,10 +362,6 @@ def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid |
                 and not w["edge"]):
             add(w, "timing", "early_late", "late" if w["timing_ms"] > 0 else "early", w["timing_ms"], "ms",
                 abs(w["timing_ms"]) / cfg.timing_threshold_ms)
-        r = w["rhythm_ms"]
-        if r is not None and abs(r - bias) >= cfg.rhythm_threshold_ms * 1.5:
-            add(w, "rhythm", "beat_offset", "late" if r > bias else "early", r, "ms",
-                abs(r - bias) / (cfg.rhythm_threshold_ms * 1.5))
         for name, r in w["amplitude_ratio"].items():
             if not np.isfinite(r) or w["partial"]:
                 continue
@@ -443,16 +429,6 @@ def _merge(raw: list[Finding], grid: CountGrid | None) -> list[Finding]:
 
 def _tendencies(windows, rhythm, timing_dev, synced, cfg) -> list[Finding]:
     out: list[Finding] = []
-    u = rhythm.get("user")
-    bias = rhythm.get("bias_ms", 0.0)
-    if u and u.get("count", 0) >= 3 and abs(u["mean_ms"] - bias) >= cfg.rhythm_threshold_ms:
-        ref = rhythm.get("ref", {})
-        ul = rhythm.get("user_landing", {})
-        out.append(Finding("rhythm", "beat_offset", "late" if u["mean_ms"] > bias else "early", u["mean_ms"], "ms",
-                           abs(u["mean_ms"] - bias) / cfg.rhythm_threshold_ms * 1.5,
-                           extra={"ref_mean_ms": ref.get("mean_ms"),
-                                  "landing_mean_ms": ul.get("mean_ms") if ul.get("count", 0) >= 3 else None,
-                                  "on_beat_ratio": u["on_beat_ratio"]}))
     lv = rhythm.get("landing_vs_ref", {})
     if lv.get("count", 0) >= 3 and abs(lv["mean_ms"]) >= cfg.landing_threshold_ms:
         out.append(Finding("steps", "landing", "late" if lv["mean_ms"] > 0 else "early", lv["mean_ms"], "ms",

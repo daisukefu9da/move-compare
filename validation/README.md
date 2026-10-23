@@ -85,7 +85,7 @@ user = "videos/elbow_bent.mp4"
 |---|---|---|---|---|
 | `shape`（身体の形） | `angle` | `left/right_elbow`, `_shoulder`, `_hip`, `_knee` | `smaller`（曲がっている・腕/脚が下がっている）/ `larger` | 度（レビュー対象 − 手本） |
 | `timing`（手本とのタイミング） | `early_late` | - | `late` / `early` | ms（正 = 遅い） |
-| `rhythm`（リズム） | `beat_offset` | - | `late` / `early` | ms（拍とのズレ） |
+| `rhythm`（リズム） | **廃止**（検出されない） | | | |
 | `steps`（ステップ） | `landing` | `left/right_ankle`（片足だけの場合） | `late` / `early` | ms |
 | | `stance` | - | `wider` / `narrower` | 胴の長さ比 |
 | | `travel` | - | `less` / `more` | 胴の長さ比 |
@@ -100,8 +100,7 @@ user = "videos/elbow_bent.mp4"
 - 手本と同じ位置・角度から撮ると、2D 骨格の誤差が揃って比較しやすくなります
 - 拍のカウントがずれないよう、`first_one`（手本動画で「1エイト目の1」の時刻）を指定してください。
   自動検出では最初の拍を取りこぼして 1 拍ずれることがあります
-- **全体を半拍遅らせた場合**、動きは裏拍（&）にぴったり乗るので「拍とのズレ（rhythm）」には出ません。
-  手本との時間差（`timing` / `early_late`）と、着地のズレ（`steps` / `landing`）で検出されます
+- **全体を半拍遅らせた場合**は、手本との時間差（`timing` / `early_late`）と、着地のズレ（`steps` / `landing`）で検出されます
 - 振れ幅を抑えると、腕が上がりきらない分「身体の形（肩の角度）」の差も出ます。これは誤検出ではないので、
   必要なら `expect` に加えるか、想定外の検出として確認してください
 - 肘を曲げると手先の振れ幅も小さくなるので、「動きの大きさ（手）」が想定外の検出として出ることがあります

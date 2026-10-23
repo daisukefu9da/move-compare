@@ -9,7 +9,7 @@ import numpy as np
 ASPECTS = {
     "shape": "身体の形",
     "steps": "ステップ",
-    "rhythm": "リズム",
+    "rhythm": "リズム",  # 廃止（スコア・指摘には使わない. 古い結果ファイルの読み込み用に残す）
     "timing": "手本とのタイミング",
     "amplitude": "動きの大きさ",
     "sharpness": "キレ",

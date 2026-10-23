@@ -84,7 +84,8 @@ def test_detects_delay_and_rhythm():
     assert 70 < r.rhythm["user"]["mean_ms"] < 130
     assert abs(r.rhythm["ref"]["mean_ms"]) < 20
     kinds = {(f.aspect, f.direction) for f in r.tendencies}
-    assert ("rhythm", "late") in kinds
+    assert not [f for f in r.findings + r.tendencies if f.aspect == "rhythm"]  # リズムは評価しない
+    assert "rhythm" not in r.scores
     assert ("timing", "late") in kinds
 
 

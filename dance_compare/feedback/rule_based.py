@@ -81,11 +81,4 @@ class RuleBasedNarrator:
             out.append("")
         if not p["tendencies"] and not p["items"]:
             out += ["大きなズレは見つかりませんでした。", ""]
-        rh = report.rhythm
-        if "user" in rh and rh["user"].get("count"):
-            u = rh["user"]
-            line = f"拍に合っている割合: {u['on_beat_ratio'] * 100:.0f}%（平均 {u['mean_ms']:+.0f}ms, ばらつき {u['std_ms']:.0f}ms）"
-            if "ref" in rh and rh["ref"].get("count"):
-                line += f"／手本 {rh['ref']['on_beat_ratio'] * 100:.0f}%（平均 {rh['ref']['mean_ms']:+.0f}ms）"
-            out += ["### リズム", "", line, ""]
         return "\n".join(out)
