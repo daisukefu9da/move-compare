@@ -14,9 +14,10 @@ import streamlit as st
 
 from dance_compare.core.config import AnalysisConfig
 from dance_compare.core.counts import fmt_time
-from dance_compare.core.report import ASPECTS
+from dance_compare.core.parts import GROUPS
 from dance_compare.core.skeleton import JA_NAMES
 from dance_compare.feedback import get_narrator
+from dance_compare.feedback.rule_based import moment_lines, moment_title, tendency_line
 from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
                                     extract_tracks, save_outputs, suggest_range)
@@ -73,6 +74,15 @@ with st.sidebar:
     open_ends = st.checkbox("レビュー対象の前後に余分な部分がある", value=False, disabled=mode != "2動画モード",
                             help="2動画モード用. レビュー対象の動画だけ撮影開始が早い・終了が遅い場合")
 
+    st.subheader("部位の重み")
+    st.caption("スコアと「直すところ」の選び方に効きます。0 にするとその部位は評価しません"
+               "（例: 腕の形を自由にしているジャンルなら腕を下げる）。")
+    w_legs = st.slider("足", 0.0, 3.0, 1.0, 0.25)
+    w_hips = st.slider("腰（体幹）", 0.0, 3.0, 1.0, 0.25)
+    w_head = st.slider("頭（首の動きを含む）", 0.0, 3.0, 1.0, 0.25)
+    w_arms = st.slider("腕", 0.0, 3.0, 1.0, 0.25)
+    w_timing = st.slider("タイミング（全身）", 0.0, 3.0, 1.0, 0.25)
+
     st.subheader("指摘のしきい値")
     base = AnalysisConfig()
     cfg_file = st.file_uploader("設定ファイル (TOML)", type=["toml"])
@@ -97,6 +107,10 @@ with st.sidebar:
         stance_thr = st.slider("足幅の差 [胴の長さの%]", 10, 80, int(round(base.stance_threshold * 100)), 5)
         travel_thr = st.slider("移動量の差 [胴の長さの%]", 10, 150, int(round(base.travel_threshold * 100)), 5)
         landing_thr = st.slider("着地タイミングの差 [ms]", 30.0, 300.0, base.landing_threshold_ms, 10.0)
+        head_tilt_thr = st.slider("頭の傾きの差 [°]", 5.0, 45.0, base.head_tilt_threshold_deg, 1.0)
+        head_turn_thr = st.slider("顔の向きの差 [°]", 10.0, 90.0, base.head_turn_threshold_deg, 5.0)
+        head_shift_thr = st.slider("頭の横スライドの差 [胴の長さの%]", 3, 40, int(round(base.head_shift_threshold * 100)), 1)
+        head_nod_thr = st.slider("頭の上下の差 [胴の長さの%]", 3, 30, int(round(base.head_nod_threshold * 100)), 1)
         full_ratio = st.slider("減点しないズレの範囲 [しきい値に対する割合]", 0.0, 0.9, base.score_full_ratio, 0.05,
                                help="測定誤差を見込んで、しきい値のこの割合以下のズレは減点しない")
         window_counts = st.select_slider("評価の区切り [カウント]", [1, 2, 4, 8], base.window_counts)
@@ -118,6 +132,10 @@ cfg = base.replace(angle_threshold_deg=angle_thr, timing_threshold_ms=timing_thr
                    level_threshold=level_thr / 100, facing_threshold_deg=facing_thr, lean_threshold_deg=lean_thr,
                    stance_threshold=stance_thr / 100, travel_threshold=travel_thr / 100,
                    landing_threshold_ms=landing_thr, score_full_ratio=full_ratio,
+                   head_tilt_threshold_deg=head_tilt_thr, head_turn_threshold_deg=head_turn_thr,
+                   head_shift_threshold=head_shift_thr / 100, head_nod_threshold=head_nod_thr / 100,
+                   weight_legs=w_legs, weight_hips=w_hips, weight_head=w_head, weight_arms=w_arms,
+                   weight_timing=w_timing,
                    window_counts=window_counts, accent_mode=accent_mode, dtw_open_ends=open_ends)
 rhythm = Rhythm(bpm=bpm, first_one=first_one or None, detect=beat_mode != "使わない")
 
@@ -296,13 +314,12 @@ else:
 
 if result is not None:
     narrator = get_narrator(narrator_name)
-    text = narrator.narrate(result.report)
     out_dir = os.path.join(OUT_DIR, "latest")
     with st.spinner("比較動画を作成中…" if make_video else "保存中…"):
         prog = Progress() if make_video else None
-        paths = save_outputs(result, out_dir, text, render=make_video,
+        paths = save_outputs(result, out_dir, narrator, render=make_video,
                              progress=(lambda i, n: prog("比較動画", i, n)) if prog else None)
-    st.session_state["last"] = (result, text, paths, getattr(narrator, "last_error", None))
+    st.session_state["last"] = (result, paths["text"], paths, getattr(narrator, "last_error", None))
 
 # ---------------------------------------------------------------------------
 # 結果
@@ -310,6 +327,7 @@ if result is not None:
 if "last" in st.session_state:
     result, text, paths, err = st.session_state["last"]
     rep = result.report
+    out_dir = os.path.dirname(paths["json"])
     for n in result.notes:
         if "できません" in n or "付けられなかった" in n:
             st.warning(n)
@@ -318,17 +336,40 @@ if "last" in st.session_state:
     if err:
         st.warning(err)
 
+    # 部位別スコア（重み 0 の部位は「-」）
     sc = rep.scores
-    cols = st.columns(len(sc))
-    cols[0].metric("総合", "-" if sc["overall"] is None else f"{sc['overall']:.0f}")
-    for c, (k, v) in zip(cols[1:], [(k, v) for k, v in sc.items() if k != "overall"]):
-        c.metric(ASPECTS[k], "-" if v is None else f"{v:.0f}")
+    keys = [k for k in GROUPS if k in sc]
+    cols = st.columns(len(keys) + 1)
+    cols[0].metric("総合", "-" if sc.get("overall") is None else f"{sc['overall']:.0f}")
+    for c, k in zip(cols[1:], keys):
+        c.metric(GROUPS[k], "-" if sc[k] is None else f"{sc[k]:.0f}")
 
-    left, right = st.columns([3, 2])
-    with left:
-        if "video" in paths and os.path.exists(paths["video"]):
-            st.video(paths["video"])
-        st.subheader("時系列")
+    # 直すところ（ズレの大きい瞬間の上位）
+    st.subheader("直すところ")
+    if not rep.moments:
+        st.success("大きなズレは見つかりませんでした。")
+    for m in rep.moments:
+        img = os.path.join(out_dir, m.get("image") or "")
+        if m.get("image") and os.path.exists(img):
+            st.image(img, width="stretch")
+        else:
+            st.markdown(f"**{moment_title(m)}**")
+            for line in moment_lines(m):
+                st.markdown(f"- {line}")
+
+    if rep.tendencies:
+        st.markdown("**全体の傾向**\n\n" + "\n".join(f"- {tendency_line(f)}" for f in rep.tendencies))
+    if "video" in paths and os.path.exists(paths["video"]):
+        st.subheader("比較動画")
+        st.video(paths["video"])
+
+    with st.expander("詳細（すべての指摘・時系列）"):
+        rows = [{"範囲": r["scope"], "カウント": r["label"], "開始[秒]": r["t_start"], "終了[秒]": r["t_end"],
+                 "部位グループ": r["group_ja"], "観点": r["aspect_ja"], "項目": r["kind_ja"], "部位": r["part_ja"],
+                 "ズレ量": r["value_text"], "優先度": r["severity"], "説明": r["description"]}
+                for r in findings_rows(rep)]
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         tl = rep.timeline
         t = np.round(np.asarray(tl["t"]), 2)
         tab1, tab2, tab3 = st.tabs(["関節角度の差 [°]", "タイミング差 [ms]", "動きの速さ"])
@@ -339,15 +380,8 @@ if "last" in st.session_state:
             st.line_chart(pd.DataFrame({"レビュー対象の遅れ": tl["timing_ms"]}, index=t))
         with tab3:
             st.line_chart(pd.DataFrame({"手本": tl["ref_speed"], "レビュー対象": tl["user_speed"]}, index=t))
-    with right:
-        st.markdown(text)
-
-    st.subheader("検出一覧（カウント・部位・観点・ズレ量）")
-    rows = [{"範囲": r["scope"], "カウント": r["label"], "開始[秒]": r["t_start"], "終了[秒]": r["t_end"],
-             "観点": r["aspect_ja"], "項目": r["kind_ja"], "部位": r["part_ja"], "ズレ量": r["value_text"],
-             "優先度": r["severity"], "説明": r["description"]} for r in findings_rows(rep)]
-    if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        if narrator_name == "gemini":
+            st.markdown(text)
     c1, c2, c3 = st.columns(3)
     with open(paths["findings_csv"], "rb") as f:
         c3.download_button("findings.csv", f.read(), "findings.csv")

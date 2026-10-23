@@ -30,7 +30,7 @@ user = "videos/elbow_bent.mp4"
   end = "2-8"                # 2エイト目の8カウントまで（含む）
   max = -20                  # ズレ量 [°] が -20 以下（20°以上曲がっている）
   [[case.forbid]]            # 検出されるべきでないこと
-  aspect = "timing"
+  kind = "early_late"        # 手本との時間差
 
 # ---------------------------------------------------------------------------
 [[case]]
@@ -54,8 +54,8 @@ note = "3エイト目のステップの着地だけ遅らせる"
 ref = "videos/ref.mp4"
 user = "videos/landing_late.mp4"
   [[case.expect]]
-  aspect = "steps"
-  kind = "landing"
+  group = "legs"             # 部位（足）
+  kind = "landing"           # 着地タイミング
   direction = "late"
   start = "3-1"
   end = "3-8"
@@ -63,7 +63,6 @@ user = "videos/landing_late.mp4"
   [[case.forbid]]
   aspect = "shape"
   [[case.forbid]]            # 他の区間では着地のズレが出ないこと
-  aspect = "steps"
   kind = "landing"
   start = "1-1"
   end = "2-6"
@@ -80,7 +79,7 @@ user = "videos/small_amplitude.mp4"
   direction = "smaller"
   max = 0.85                 # 手本の 85% 以下
   [[case.forbid]]
-  aspect = "timing"
+  kind = "early_late"
   [[case.forbid]]
   aspect = "sharpness"
 

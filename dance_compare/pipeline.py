@@ -266,8 +266,12 @@ def analyze_single_video(
     return AnalysisResult(report, video, video, ref_seq, user_seq, notes)
 
 
-def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool = True, progress=None) -> dict:
-    """report.json / report.md / comparison.mp4 / 骨格の JSON を書き出す."""
+def save_outputs(result: AnalysisResult, out_dir: str, narrator, render: bool = True, progress=None) -> dict:
+    """report.json / report.md / 静止画 / comparison.mp4 / 骨格の JSON を書き出す.
+
+    narrator: 文章を作る Narrator（静止画を作った後で文章を作るため）、または作成済みの文章.
+    戻り値の "text" に文章が入る.
+    """
     os.makedirs(out_dir, exist_ok=True)
     paths = {
         "json": os.path.join(out_dir, "report.json"),
@@ -276,7 +280,20 @@ def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool =
         "user_pose": os.path.join(out_dir, "user_pose.json"),
         "findings_csv": os.path.join(out_dir, "findings.csv"),
     }
-    # 比較動画を先に作る（失敗しても解析結果は保存し、理由を処理メモに残す）
+    # 「直すところ」の静止画（文章から参照するので先に作る）
+    from .render.stills import render_moments
+
+    for old in os.listdir(out_dir):  # 前回の静止画が残らないように
+        if old.startswith("moment_") and old.endswith(".jpg"):
+            os.remove(os.path.join(out_dir, old))
+    try:
+        paths["moments"] = render_moments(result.report, result.ref_video, result.user_video,
+                                          result.ref_seq, result.user_seq, out_dir)
+    except Exception as e:  # 静止画が作れなくても解析結果は返す
+        result.notes.append(f"静止画を作れませんでした: {e}")
+    text = narrator if isinstance(narrator, str) else narrator.narrate(result.report)
+    paths["text"] = text
+    # 比較動画（失敗しても解析結果は保存し、理由を処理メモに残す）
     if render:
         from .render.overlay import render_comparison
 
@@ -292,7 +309,7 @@ def save_outputs(result: AnalysisResult, out_dir: str, text: str, render: bool =
         json.dump(result.report.to_dict(), f, ensure_ascii=False, indent=1)
     with open(paths["markdown"], "w", encoding="utf-8") as f:
         f.write(text)
-        f.write("\n### 検出一覧（カウント・部位・観点・ズレ量）\n\n" + markdown_table(result.report))
+        f.write("\n### 検出一覧（すべての指摘）\n\n" + markdown_table(result.report))
         if result.notes:
             f.write("\n### 処理メモ\n\n" + "\n".join(f"- {n}" for n in result.notes) + "\n")
     write_csv(result.report, paths["findings_csv"])

@@ -8,12 +8,13 @@ import numpy as np
 
 ASPECTS = {
     "shape": "身体の形",
-    "steps": "ステップ",
-    "rhythm": "リズム",  # 廃止（スコア・指摘には使わない. 古い結果ファイルの読み込み用に残す）
-    "timing": "手本とのタイミング",
     "amplitude": "動きの大きさ",
     "sharpness": "キレ",
+    "timing": "タイミング",
+    # 以下は廃止（古い結果ファイル・ケースファイルの読み込み用に残す）
+    "steps": "ステップ",
     "level": "レベル・向き",
+    "rhythm": "リズム",
 }
 
 
@@ -28,7 +29,8 @@ class Finding:
     value:     ズレの大きさ（unit の単位, 符号付き）
     t_start, t_end: 手本動画上の時刻 [秒]。全体傾向なら None
     label:     カウント表記（例: "2エイト目の3〜4カウント"）
-    severity:  優先度（しきい値に対する倍率 × 継続時間の補正）
+    severity:  優先度（しきい値に対する倍率 × 継続時間の補正 × 部位の重み）
+    group:     部位グループ（legs / hips / head / arms / timing. parts.GROUPS）
     """
 
     aspect: str
@@ -42,6 +44,7 @@ class Finding:
     t_end: float | None = None
     label: str | None = None
     extra: dict = field(default_factory=dict)
+    group: str | None = None
 
     @property
     def is_global(self) -> bool:
@@ -51,7 +54,7 @@ class Finding:
 @dataclass
 class Report:
     meta: dict
-    scores: dict                  # 観点ごとのスコア (0-100) と overall
+    scores: dict                  # 部位ごとのスコア (0-100, parts.GROUPS) と overall
     findings: list[Finding]       # 区間ごとの指摘（優先度順）
     tendencies: list[Finding]     # 全体的な傾向
     windows: list[dict]           # 区間ごとの数値
@@ -60,6 +63,7 @@ class Report:
     warp: dict                    # 手本の時刻 -> レビュー対象の時刻 の対応表
     beats: list[float] = field(default_factory=list)  # 手本動画上の拍の時刻
     first_one: float | None = None                    # 1エイト目の 1 の時刻
+    moments: list[dict] = field(default_factory=list)  # 直すところ（ズレの大きい瞬間の上位. analyzer._moments）
 
     def user_time(self, ref_time: float | np.ndarray) -> np.ndarray:
         """手本動画の時刻 -> 対応するレビュー対象動画の時刻."""

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
+import copy
+from dataclasses import asdict
+
 from .config import AnalysisConfig
 from .counts import CountGrid
 from .dtw import dtw, monotonic, pairwise_cost, path_to_warp
 from .features import Features, compute_features
+from .parts import ASPECT_OF_KIND, GROUPS, group_of, joints_of
 from .preprocess import clean, gaussian_smooth, mirror, normalize, resample
 from .report import Finding, Report
 from .rhythm import (beat_grid, foot_landings, match_events, movement_accents,
@@ -20,7 +24,7 @@ END_NAMES = list(END_EFFECTORS)
 def _prepare(seq: PoseSequence, cfg: AnalysisConfig) -> tuple[PoseSequence, Features]:
     seq = resample(clean(seq, cfg.conf_threshold, cfg.smooth_sigma_s), cfg.analysis_fps)
     body, world, _ = normalize(seq.keypoints)
-    return seq, compute_features(body, world, seq.fps)
+    return seq, compute_features(body, world, seq.fps, seq.scores)
 
 
 def _sample(x: np.ndarray, pos: np.ndarray) -> np.ndarray:
@@ -112,47 +116,56 @@ def _worst_and_mean(points: np.ndarray) -> float:
     return float(0.5 * points.min() + 0.5 * points.mean())
 
 
-def _scores(windows: list[dict], rhythm: dict, cfg: AnalysisConfig) -> dict:
-    """観点ごとのスコア. 区間ごとの一貫したズレ（指摘と同じ単位）から計算する.
+def window_excess(w: dict, cfg: AnalysisConfig) -> dict[str, list[float]]:
+    """区間の各項目のズレを「しきい値の何倍か」で、部位グループごとに集める（スコア計算用）."""
+    out: dict[str, list[float]] = {g: [] for g in GROUPS}
+    for name, d in w["angle_diff"].items():
+        out[group_of("angle", name)].append(d / cfg.angle_threshold_deg)
+    if w["ref_motion"] >= cfg.min_motion_for_timing and not w["edge"]:
+        out["timing"].append(w["timing_ms"] / cfg.timing_threshold_ms)
+    if not w["partial"]:
+        amp_log, sh_log = -np.log(cfg.amplitude_low), -np.log(cfg.sharpness_low)
+        for name, r in w["amplitude_ratio"].items():
+            if np.isfinite(r) and r > 0:
+                out[group_of("amplitude", name)].append(np.log(r) / amp_log)
+        for name, r in w["sharpness_ratio"].items():
+            if np.isfinite(r) and r > 0:  # 手本よりキレがある分は減点しない
+                out[group_of("sharpness", name)].append(max(0.0, -np.log(r)) / sh_log)
+    out["hips"] += [w["level_diff"] / cfg.level_threshold, w["facing_diff"] / cfg.facing_threshold_deg,
+                    w["lean_diff"] / cfg.lean_threshold_deg, w["travel_diff"] / cfg.travel_threshold]
+    out["legs"].append(w["stance_diff"] / cfg.stance_threshold)
+    if w.get("landing_ms") is not None:
+        out["legs"].append(w["landing_ms"] / cfg.landing_threshold_ms)
+    for key, thr in (("tilt", cfg.head_tilt_threshold_deg), ("turn", cfg.head_turn_threshold_deg),
+                     ("shift", cfg.head_shift_threshold), ("nod", cfg.head_nod_threshold)):
+        v = w.get(f"head_{key}_diff")
+        if v is not None and np.isfinite(v):
+            out["head"].append(v / thr)
+    return out
 
-    1 コマごとの角度などは骨格推定のぶれを含むので、区間で平均した値を使う。
+
+def _scores(windows: list[dict], cfg: AnalysisConfig) -> dict:
+    """部位ごとのスコアと、重み付きの総合スコア.
+
+    区間ごとの一貫したズレ（指摘と同じ単位）から計算する。1 コマごとの角度などは骨格推定のぶれを
+    含むので使わない。リズム（拍とのズレ）は使わない（遅れ・走りは「手本とのタイミング」で評価）。
     """
-    def g(e):
-        return grade(e, cfg.score_full_ratio)
-
-    def mean(xs):
-        xs = [x for x in xs if x is not None and np.isfinite(x)]
-        return float(np.mean(xs)) if xs else None
-
-    shape, timing, amp, sharp, level, steps = [], [], [], [], [], []
+    per_group: dict[str, list[float]] = {g: [] for g in GROUPS}
     for w in windows:
-        shape.append(_worst_and_mean(g(np.array(list(w["angle_diff"].values())) / cfg.angle_threshold_deg)))
-        if w["ref_motion"] >= cfg.min_motion_for_timing and not w["edge"]:
-            timing.append(float(g(w["timing_ms"] / cfg.timing_threshold_ms)))
-        if not w["partial"]:
-            amp_log = -np.log(cfg.amplitude_low)
-            a = [np.log(r) / amp_log for r in w["amplitude_ratio"].values() if np.isfinite(r) and r > 0]
-            if a:
-                amp.append(_worst_and_mean(g(np.array(a))))
-            sh_log = -np.log(cfg.sharpness_low)
-            # 手本よりキレがある分は減点しない
-            k = [max(0.0, -np.log(r)) / sh_log for r in w["sharpness_ratio"].values() if np.isfinite(r) and r > 0]
-            if k:
-                sharp.append(_worst_and_mean(g(np.array(k))))
-        level.append(float(np.mean(g(np.array([w["level_diff"] / cfg.level_threshold,
-                                                 w["facing_diff"] / cfg.facing_threshold_deg,
-                                                 w["lean_diff"] / cfg.lean_threshold_deg])))))
-        st = [w["stance_diff"] / cfg.stance_threshold, w["travel_diff"] / cfg.travel_threshold]
-        if w.get("landing_ms") is not None:
-            st.append(w["landing_ms"] / cfg.landing_threshold_ms)
-        steps.append(float(np.mean(g(np.array(st)))))
-
-    scores = {"shape": mean(shape), "timing": mean(timing), "amplitude": mean(amp),
-              "sharpness": mean(sharp), "level": mean(level), "steps": mean(steps)}
-    # リズム（拍とのズレ）はスコアに入れない. 遅れ・走りは「手本とのタイミング」で同じ動きどうしを
-    # 直接比べて評価する（拍の検出精度に左右されず、部分的な遅れも区間ごとに拾えるため）
-    valid = [v for v in scores.values() if v is not None]
-    scores["overall"] = float(np.mean(valid)) if valid else None
+        for g, ex in window_excess(w, cfg).items():
+            ex = [e for e in ex if e is not None and np.isfinite(e)]  # 画面外などで取れない項目は除く
+            if ex:
+                per_group[g].append(_worst_and_mean(grade(np.array(ex), cfg.score_full_ratio)))
+    scores: dict = {g: (float(np.mean(v)) if v else None) for g, v in per_group.items()}
+    total = weight = 0.0
+    for g, v in scores.items():
+        wg = cfg.weight(g)
+        if v is not None and wg > 0:
+            total += wg * v
+            weight += wg
+        elif wg <= 0:
+            scores[g] = None  # 重み 0 の部位は評価しない
+    scores["overall"] = total / weight if weight > 0 else None
     return scores
 
 
@@ -206,6 +219,15 @@ def compare(
     facing_diff = _sample(U.facing, warp) - R.facing
     lean_diff = _sample(U.lean, warp) - R.lean
     stance_diff = _sample(U.stance, warp) - R.stance
+    # 頭: 傾き・向きはそのまま、横スライド・上下は各自の普段の位置（中央値）からの差で比べる（顔の形・撮影角度の違いを除く）
+    head_diff = {}
+    for key in ("tilt", "turn", "shift", "nod"):
+        u, r = _sample(U.head[key], warp), R.head[key]
+        if key in ("shift", "nod"):
+            u, r = u - np.nanmedian(U.head[key]), r - np.nanmedian(R.head[key])
+        head_diff[key] = u - r
+    head_ok = ((np.minimum(_sample(U.head_conf, warp), R.head_conf) >= cfg.head_min_conf)
+               & (_sample(U.facing, warp) < 120) & (R.facing < 120))  # 顔が見えている（背中向きでない）コマだけ
 
     t_abs = t_ref + ref_s.t0
     grid = None
@@ -277,6 +299,9 @@ def compare(
             "lean_diff": float(np.mean(lean_diff[m])),
             "stance_diff": float(np.mean(stance_diff[m])),
         }
+        hm = m & head_ok
+        for key in head_diff:  # 顔が見えているコマが区間の半分未満なら評価しない
+            w[f"head_{key}_diff"] = float(np.mean(head_diff[key][hm])) if hm.sum() >= 0.5 * m.sum() else None
         # 移動量（重心 = 腰の中点の移動）
         r_move = R.hip[idx[-1]] - R.hip[idx[0]]
         u_move = _sample(U.hip, np.array([warp[idx[-1]]]))[0] - _sample(U.hip, np.array([warp[idx[0]]]))[0]
@@ -308,10 +333,16 @@ def compare(
         w["rhythm_ms"] = float(np.mean(user_acc_off[in_w])) if in_w.sum() >= 2 else None
         windows.append(w)
 
-    findings = _window_findings(windows, cfg, grid)
+    raw = _window_findings(windows, cfg)
+    findings = _merge(copy.deepcopy(raw), grid)
     tendencies = _tendencies(windows, rhythm, timing_dev, synced, cfg)
-
-    scores = _scores(windows, rhythm, cfg)
+    scores = _scores(windows, cfg)
+    series = {
+        "angle": angle_diff, "level": level_diff, "facing": facing_diff, "lean": lean_diff,
+        "stance": stance_diff, "early_late": timing_dev,
+        **{f"head_{k}": np.where(head_ok, v, 0.0) for k, v in head_diff.items()},
+    }
+    moments = _moments(raw, windows, series, R, t_abs, t_user + user_s.t0, land_r, ref_s.t0, grid, cfg)
 
     step = max(1, int(round(fps / 10)))  # グラフ用に 10fps 程度へ間引く
     timeline = {
@@ -336,6 +367,7 @@ def compare(
         warp={"ref": t_abs[::3], "user": (t_user + user_s.t0)[::3]},
         beats=[] if grid is None else grid.beats.tolist(),
         first_one=None if grid is None else grid.first_one,
+        moments=moments,
     )
 
 
@@ -343,63 +375,69 @@ def compare(
 # 指摘の抽出
 # ---------------------------------------------------------------------------
 
-def _window_findings(windows: list[dict], cfg: AnalysisConfig, grid: CountGrid | None) -> list[Finding]:
-    """区間ごとの指摘."""
+def _window_findings(windows: list[dict], cfg: AnalysisConfig) -> list[Finding]:
+    """区間ごとの指摘（隣り合う区間をまとめる前）. 優先度には部位の重みを掛け、重み 0 の部位は出さない."""
     raw: list[Finding] = []
 
-    def add(w, aspect, kind, direction, value, unit, sev, part=None, **extra):
-        raw.append(Finding(aspect=aspect, kind=kind, direction=direction, value=float(value), unit=unit,
-                           severity=float(sev), part=part, t_start=w["t_start"], t_end=w["t_end"],
-                           label=w["label"], extra=extra))
+    def add(w, kind, direction, value, unit, sev, part=None, **extra):
+        group = group_of(kind, part)
+        weight = cfg.weight(group)
+        if weight <= 0:
+            return
+        raw.append(Finding(aspect=ASPECT_OF_KIND[kind], kind=kind, direction=direction, value=float(value),
+                           unit=unit, severity=float(sev) * weight, part=part, t_start=w["t_start"],
+                           t_end=w["t_end"], label=w["label"], extra=extra, group=group))
 
     for w in windows:
         for name, d in w["angle_diff"].items():
             if abs(d) >= cfg.angle_threshold_deg:
                 # 角度が小さい = より曲がっている（肩・股関節は腕・脚が体に近い）
-                add(w, "shape", "angle", "smaller" if d < 0 else "larger", d, "deg",
-                    abs(d) / cfg.angle_threshold_deg, part=name)
+                add(w, "angle", "smaller" if d < 0 else "larger", d, "deg", abs(d) / cfg.angle_threshold_deg,
+                    part=name)
         if (abs(w["timing_ms"]) >= cfg.timing_threshold_ms and w["ref_motion"] >= cfg.min_motion_for_timing
                 and not w["edge"]):
-            add(w, "timing", "early_late", "late" if w["timing_ms"] > 0 else "early", w["timing_ms"], "ms",
+            add(w, "early_late", "late" if w["timing_ms"] > 0 else "early", w["timing_ms"], "ms",
                 abs(w["timing_ms"]) / cfg.timing_threshold_ms)
         for name, r in w["amplitude_ratio"].items():
             if not np.isfinite(r) or w["partial"]:
                 continue
             if r < cfg.amplitude_low:
-                add(w, "amplitude", "amplitude", "smaller", r, "ratio",
-                    np.log(r) / np.log(cfg.amplitude_low), part=name)
+                add(w, "amplitude", "smaller", r, "ratio", np.log(r) / np.log(cfg.amplitude_low), part=name)
             elif r > cfg.amplitude_high:
-                add(w, "amplitude", "amplitude", "larger", r, "ratio",
-                    np.log(r) / np.log(cfg.amplitude_high), part=name)
+                add(w, "amplitude", "larger", r, "ratio", np.log(r) / np.log(cfg.amplitude_high), part=name)
         for name, r in w["sharpness_ratio"].items():
             if np.isfinite(r) and r < cfg.sharpness_low and not w["partial"]:
-                add(w, "sharpness", "sharpness", "weaker", r, "ratio",
-                    np.log(r) / np.log(cfg.sharpness_low), part=name)
+                add(w, "sharpness", "weaker", r, "ratio", np.log(r) / np.log(cfg.sharpness_low), part=name)
         lm = w.get("landing_ms")
         if lm is not None and abs(lm) >= cfg.landing_threshold_ms:
             feet = w.get("landing_feet") or []
-            part = feet[0] if len(feet) == 1 else None
-            add(w, "steps", "landing", "late" if lm > 0 else "early", lm, "ms",
-                abs(lm) / cfg.landing_threshold_ms, part=part)
+            add(w, "landing", "late" if lm > 0 else "early", lm, "ms", abs(lm) / cfg.landing_threshold_ms,
+                part=feet[0] if len(feet) == 1 else None)
         if abs(w["level_diff"]) >= cfg.level_threshold:
-            add(w, "level", "level", "higher" if w["level_diff"] > 0 else "lower", w["level_diff"], "torso",
+            add(w, "level", "higher" if w["level_diff"] > 0 else "lower", w["level_diff"], "torso",
                 abs(w["level_diff"]) / cfg.level_threshold)
         if abs(w["facing_diff"]) >= cfg.facing_threshold_deg:
-            add(w, "level", "facing", "more_turned" if w["facing_diff"] > 0 else "less_turned",
-                w["facing_diff"], "deg", abs(w["facing_diff"]) / cfg.facing_threshold_deg)
+            add(w, "facing", "more_turned" if w["facing_diff"] > 0 else "less_turned", w["facing_diff"], "deg",
+                abs(w["facing_diff"]) / cfg.facing_threshold_deg)
         if abs(w["lean_diff"]) >= cfg.lean_threshold_deg:
-            add(w, "level", "lean", "right" if w["lean_diff"] > 0 else "left", w["lean_diff"], "deg",
+            add(w, "lean", "right" if w["lean_diff"] > 0 else "left", w["lean_diff"], "deg",
                 abs(w["lean_diff"]) / cfg.lean_threshold_deg)
         if abs(w["stance_diff"]) >= cfg.stance_threshold:
-            add(w, "steps", "stance", "wider" if w["stance_diff"] > 0 else "narrower", w["stance_diff"], "torso",
+            add(w, "stance", "wider" if w["stance_diff"] > 0 else "narrower", w["stance_diff"], "torso",
                 abs(w["stance_diff"]) / cfg.stance_threshold)
         if w["travel_diff"] >= cfg.travel_threshold:
             r, u = np.array(w["travel_ref"]), np.array(w["travel_user"])
-            direction = "less" if np.linalg.norm(u) < np.linalg.norm(r) else "more"
-            add(w, "steps", "travel", direction, w["travel_diff"], "torso",
+            add(w, "travel", "less" if np.linalg.norm(u) < np.linalg.norm(r) else "more", w["travel_diff"], "torso",
                 w["travel_diff"] / cfg.travel_threshold, ref=r.tolist(), user=u.tolist())
-
-    return _merge(raw, grid)
+        for key, thr, unit, pos, neg in (
+                ("tilt", cfg.head_tilt_threshold_deg, "deg", "right", "left"),
+                ("turn", cfg.head_turn_threshold_deg, "deg", "left", "right"),
+                ("shift", cfg.head_shift_threshold, "torso", "left", "right"),
+                ("nod", cfg.head_nod_threshold, "torso", "up", "down")):
+            v = w.get(f"head_{key}_diff")
+            if v is not None and abs(v) >= thr:
+                add(w, f"head_{key}", pos if v > 0 else neg, v, unit, abs(v) / thr)
+    return raw
 
 
 def _merge(raw: list[Finding], grid: CountGrid | None) -> list[Finding]:
@@ -431,28 +469,130 @@ def _tendencies(windows, rhythm, timing_dev, synced, cfg) -> list[Finding]:
     out: list[Finding] = []
     lv = rhythm.get("landing_vs_ref", {})
     if lv.get("count", 0) >= 3 and abs(lv["mean_ms"]) >= cfg.landing_threshold_ms:
-        out.append(Finding("steps", "landing", "late" if lv["mean_ms"] > 0 else "early", lv["mean_ms"], "ms",
-                           abs(lv["mean_ms"]) / cfg.landing_threshold_ms))
+        out.append(Finding("timing", "landing", "late" if lv["mean_ms"] > 0 else "early", lv["mean_ms"], "ms",
+                           abs(lv["mean_ms"]) / cfg.landing_threshold_ms, group="legs"))
     if synced:
         mean_t = float(np.median(timing_dev))
         if abs(mean_t) >= cfg.timing_threshold_ms * 0.6:
             out.append(Finding("timing", "early_late", "late" if mean_t > 0 else "early", mean_t, "ms",
-                               abs(mean_t) / cfg.timing_threshold_ms * 1.5))
+                               abs(mean_t) / cfg.timing_threshold_ms * 1.5, group="timing"))
     for name in END_NAMES:
         vals = [w["amplitude_ratio"][name] for w in windows if np.isfinite(w["amplitude_ratio"][name])]
         if len(vals) >= 3:
             r = float(np.exp(np.mean(np.log(vals))))
             if r < cfg.amplitude_low:
                 out.append(Finding("amplitude", "amplitude", "smaller", r, "ratio",
-                                   np.log(r) / np.log(cfg.amplitude_low) * 1.5, part=name))
+                                   np.log(r) / np.log(cfg.amplitude_low) * 1.5, part=name,
+                                   group=group_of("amplitude", name)))
             elif r > cfg.amplitude_high:
                 out.append(Finding("amplitude", "amplitude", "larger", r, "ratio",
-                                   np.log(r) / np.log(cfg.amplitude_high) * 1.5, part=name))
+                                   np.log(r) / np.log(cfg.amplitude_high) * 1.5, part=name,
+                                   group=group_of("amplitude", name)))
         vals = [w["sharpness_ratio"][name] for w in windows if np.isfinite(w["sharpness_ratio"][name])]
         if len(vals) >= 3:
             r = float(np.exp(np.mean(np.log(np.maximum(vals, 1e-6)))))
             if r < cfg.sharpness_low:
                 out.append(Finding("sharpness", "sharpness", "weaker", r, "ratio",
-                                   np.log(r) / np.log(cfg.sharpness_low) * 1.5, part=name))
+                                   np.log(r) / np.log(cfg.sharpness_low) * 1.5, part=name,
+                                   group=group_of("sharpness", name)))
+    # 部位の重みを掛け、重み 0 の部位は出さない
+    out = [f for f in out if cfg.weight(f.group) > 0]
+    for f in out:
+        f.severity *= cfg.weight(f.group)
     out.sort(key=lambda f: -f.severity)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 直すところ（ズレの大きい瞬間の上位）
+# ---------------------------------------------------------------------------
+
+def _peak_frame(f: Finding, m: np.ndarray, series: dict, R: Features, land_r: dict, t0: float,
+                fps: float) -> int:
+    """指摘の区間の中で、ズレが一番はっきり見えるコマ（手本の時間軸のフレーム番号）."""
+    idx = np.where(m)[0]
+    if f.kind == "angle":
+        x = series["angle"][:, ANGLE_NAMES.index(f.part)]
+    elif f.kind in series:
+        x = series[f.kind]
+    elif f.kind in ("amplitude", "sharpness") and f.part in END_EFFECTORS:
+        # 手本の手先・足先が区間内でいちばん大きく出ているコマ（振れ幅の差が見えやすい）
+        p = R.body[:, END_EFFECTORS[f.part]]
+        x = np.linalg.norm(p - p[m].mean(axis=0), axis=1)
+    elif f.kind == "landing":
+        feet = [f.part] if f.part in land_r else list(land_r)
+        times = np.concatenate([land_r[ft] for ft in feet]) if feet else np.array([])
+        times = times[(times + t0 >= f.t_start) & (times + t0 < f.t_end)]
+        if times.size:
+            return int(np.clip(round(times[0] * fps), idx[0], idx[-1]))
+        return int(idx[len(idx) // 2])
+    else:
+        return int(idx[len(idx) // 2])
+    xs = gaussian_smooth(np.abs(np.nan_to_num(x)), 0.1 * fps)
+    return int(idx[np.argmax(xs[idx])])
+
+
+def _moments(raw: list[Finding], windows: list[dict], series: dict, R: Features, t_abs: np.ndarray,
+             t_user_abs: np.ndarray, land_r: dict, t0: float, grid: CountGrid | None,
+             cfg: AnalysisConfig) -> list[dict]:
+    """ズレの大きい瞬間を上位 cfg.top_moments 個選ぶ.
+
+    区間ごとに指摘の優先度（部位の重み込み）から点数を出し、隣り合わない区間から大きい順に選ぶ。
+    同じ内容の指摘が繰り返し出る場合（毎エイト同じ癖など）は、別の課題が入るよう 2 つ目以降で軽く見る。
+    各瞬間は、その区間で一番大きい指摘のズレが最も大きいコマ。
+    """
+    by_win: dict[int, list[Finding]] = {}
+    starts = [w["t_start"] for w in windows]
+    for f in raw:
+        if f.t_start in starts:
+            by_win.setdefault(starts.index(f.t_start), []).append(f)
+    def key(f: Finding) -> tuple:
+        return f.kind, f.part, f.direction
+
+    def score(i: int, covered: set) -> float:
+        """一番大きい指摘で決める（残りは 1/4 だけ足す. 中くらいのズレが複数あるより、大きな 1 つを優先）.
+        すでに選んだ瞬間と同じ内容の指摘は軽く見る（繰り返しを避ける）."""
+        sev = sorted((f.severity * (0.3 if key(f) in covered else 1.0) for f in by_win[i]), reverse=True)[:3]
+        return sev[0] + 0.25 * sum(sev[1:]) if sev else 0.0
+
+    chosen: list[int] = []
+    covered: set = set()
+    while len(chosen) < cfg.top_moments:
+        # 同じ場所ばかりにならないよう選んだ区間の隣は避け、一番大きい指摘がすでに見せた内容と同じ区間も除く
+        # （毎エイト同じ癖が出る場合は 1 か所だけ見せ、「他に何か所」を添える）
+        cands = [i for i in by_win if all(abs(i - j) >= 2 for j in chosen)
+                 and key(max(by_win[i], key=lambda f: f.severity)) not in covered]
+        if not cands:
+            break
+        best = max(cands, key=lambda i: score(i, covered))
+        chosen.append(best)
+        covered |= {key(f) for f in sorted(by_win[best], key=lambda f: -f.severity)[:3]}
+    fps = R.fps
+    out = []
+    for rank, i in enumerate(chosen, 1):
+        items = sorted(by_win[i], key=lambda f: -f.severity)[:3]
+        w = windows[i]
+        m = (t_abs >= w["t_start"]) & (t_abs < w["t_end"])
+        k = _peak_frame(items[0], m, series, R, land_r, t0, fps)
+        joints = sorted({j for f in items for j in joints_of(f.kind, f.part)})
+        # 一番大きい指摘と同じ内容のズレが出ている他の場所（前後に続いている区間は同じ場所とみなす）
+        main = key(items[0])
+        has = {j for j in by_win if any(key(f) == main for f in by_win[j])}
+        same_place = {i}
+        for step in (-1, 1):
+            j = i + step
+            while j in has:
+                same_place.add(j)
+                j += step
+        repeats = [windows[j]["label"] or f"{windows[j]['t_start']:.1f}秒" for j in sorted(has - same_place)]
+        out.append({
+            "rank": rank,
+            "t": float(t_abs[k]), "user_t": float(t_user_abs[k]),
+            "label": grid.label(float(t_abs[k])) if grid is not None else None,
+            "window_label": w["label"], "t_start": w["t_start"], "t_end": w["t_end"],
+            "score": float(score(i, set())),
+            "items": [asdict(f) for f in items],
+            "joints": joints,
+            "repeats": repeats,
+        })
     return out

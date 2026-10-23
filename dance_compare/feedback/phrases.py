@@ -47,6 +47,14 @@ def describe(f: Finding) -> str:
         return f"上体が手本より画面の{'右' if d == 'right' else '左'}へ約{v:.0f}°傾いている"
     if k == "stance":
         return f"足幅が手本より{'広い' if d == 'wider' else '狭い'}（胴の長さの約{v * 100:.0f}%）"
+    if k == "head_tilt":
+        return f"頭（首）の傾きが手本と違う（本人から見て{'右' if d == 'right' else '左'}に約{v:.0f}°多く傾いている）"
+    if k == "head_turn":
+        return f"顔の向きが手本と違う（本人から見て{'左' if d == 'left' else '右'}を約{v:.0f}°多く向いている）"
+    if k == "head_shift":
+        return f"頭の位置が手本より本人から見て{'左' if d == 'left' else '右'}にずれている（胴の長さの約{v * 100:.0f}%）"
+    if k == "head_nod":
+        return f"頭が手本より{'上を向いている（あごが上がっている）' if d == 'up' else '下を向いている（うつむいている）'}"
     if k == "travel":
         return f"移動の量・方向が手本と違う（{'移動が足りない' if d == 'less' else '動きすぎ'}）"
     if k == "landing":

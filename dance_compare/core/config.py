@@ -42,6 +42,11 @@ class AnalysisConfig:
     lean_threshold_deg: float = 15.0       # 上体の傾きの差
     stance_threshold: float = 0.25         # 足幅の差（胴の長さ比）
     travel_threshold: float = 0.4          # 区間内の移動量の差（胴の長さ比）
+    head_tilt_threshold_deg: float = 15.0  # 頭の傾き（左右）の差（両耳の線と両肩の線の角度）
+    head_turn_threshold_deg: float = 30.0  # 頭の向き（左右）の差
+    head_shift_threshold: float = 0.12     # 頭の横スライドの差（胴の長さ比. 各自の普段の位置からの差で比べる）
+    head_nod_threshold: float = 0.08       # 頭の上下（うなずき・見上げ）の差（胴の長さ比. 同上）
+    head_min_conf: float = 0.5             # 顔の点（鼻・耳）の信頼度がこれ未満の区間は頭を評価しない
     max_findings: int = 12                 # 表示する指摘の最大数
 
     # --- リズム ---
@@ -66,6 +71,14 @@ class AnalysisConfig:
     # --- 音声による 2 動画の同期 ---
     audio_sync_min_confidence: float = 3.5  # 相関ピークの鋭さがこれ以上なら同期できたとみなす
     audio_sync_min_uniqueness: float = 0.15 # 2 番目の候補との差（小さいと拍単位でずれる恐れ）
+
+    # --- 部位の重み（スコアと、指摘の優先度に掛ける. 0 にするとその部位は評価しない） ---
+    weight_legs: float = 1.0           # 足（膝・股関節の角度、足先の振れ幅・キレ、足幅、着地）
+    weight_hips: float = 1.0           # 腰・体幹（沈み込み、上体の傾き、体の向き、移動）
+    weight_head: float = 1.0           # 頭（首の動きを含む: 傾き、向き、横スライド、上下）
+    weight_arms: float = 1.0           # 腕（肘・肩の角度、手先の振れ幅・キレ）
+    weight_timing: float = 1.0         # 手本とのタイミング（全身）
+    top_moments: int = 3               # 「直すところ」として見せる瞬間の数
 
     # --- スコア ---
     # 各項目のズレを「指摘のしきい値の何倍か」で表し、次の対応で点数にする（しきい値と連動）:
@@ -115,3 +128,7 @@ class AnalysisConfig:
     @property
     def sharpness_low(self) -> float:
         return 1.0 - self.sharpness_tolerance
+
+    def weight(self, group: str) -> float:
+        """部位（legs / hips / head / arms / timing）の重み."""
+        return float(getattr(self, f"weight_{group}", 1.0))

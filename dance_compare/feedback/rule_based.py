@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from ..core.counts import fmt_time
+from ..core.parts import GROUPS
 from ..core.report import ASPECTS, Finding, Report
 from ..core.skeleton import JA_NAMES
 from .phrases import describe, where
+
+CIRCLED = "①②③④⑤⑥⑦⑧⑨"
 
 
 def group_findings(findings: list[Finding]) -> list[list[Finding]]:
@@ -20,24 +24,30 @@ def group_findings(findings: list[Finding]) -> list[list[Finding]]:
 
 
 def tendency_line(f: Finding) -> str:
-    if f.kind == "beat_offset":
-        ref = f.extra.get("ref_mean_ms")
-        if ref is not None:
-            s = (f"全体的に手本より拍に対して平均{abs(f.value - ref):.0f}ms"
-                 f"{'遅れ気味' if f.direction == 'late' else '早め（走り気味）'}（拍とのズレ: 本人{f.value:+.0f}ms／手本{ref:+.0f}ms）")
-        else:
-            s = f"全体的に拍より平均{abs(f.value):.0f}ms{'遅れ気味' if f.direction == 'late' else '早め（走り気味）'}"
-        land = f.extra.get("landing_mean_ms")
-        if land is not None and abs(land) >= abs(f.value) * 0.8:
-            s += f"。特にステップの着地（平均{land:+.0f}ms）"
-        return s
     if f.kind == "early_late":
         return f"全体的に手本より平均{abs(f.value):.0f}ms{'遅れている' if f.direction == 'late' else '早い'}"
     if f.kind == "amplitude":
         return f"全体的に{JA_NAMES[f.part]}の動きが手本の約{f.value * 100:.0f}%と{'小さい' if f.direction == 'smaller' else '大きい'}"
     if f.kind == "sharpness":
         return f"全体的に{JA_NAMES[f.part]}のキレが手本の約{f.value * 100:.0f}%"
+    if f.kind == "landing":
+        return f"全体的に足の着地が手本より平均{abs(f.value):.0f}ms{'遅い' if f.direction == 'late' else '早い'}"
     return "全体的に" + describe(f)
+
+
+def moment_title(m: dict) -> str:
+    """「① 2エイト目の3カウント（0:32.4）」."""
+    mark = CIRCLED[m["rank"] - 1] if m["rank"] <= len(CIRCLED) else f"{m['rank']}."
+    return f"{mark} {m['label'] or ''}（{fmt_time(m['t'])}）".replace(" （", "（")
+
+
+def moment_lines(m: dict) -> list[str]:
+    lines = [describe(Finding(**f)) for f in m["items"]]
+    reps = m.get("repeats") or []
+    if reps:
+        shown = "、".join(reps[:3]) + (" ほか" if len(reps) > 3 else "")
+        lines.append(f"同じズレが他に{len(reps)}か所あります（{shown}）")
+    return lines
 
 
 class RuleBasedNarrator:
@@ -49,19 +59,19 @@ class RuleBasedNarrator:
     def lines(self, report: Report) -> dict:
         """文章の部品（Gemini など他の Narrator への入力にも使う）."""
         n = self.max_items or report.meta.get("config", {}).get("max_findings", 12)
-        items = []
+        others = []
         for g in group_findings(report.findings)[:n]:
             places = [where(f) for f in g]
-            if len(places) > 3:
-                place = "、".join(places[:3]) + f" ほか（計{len(places)}か所）"
-            else:
-                place = "、".join(places)
-            items.append({"aspect": ASPECTS[g[0].aspect], "where": place, "what": describe(g[0]),
-                          "severity": round(max(f.severity for f in g), 2), "count": len(g)})
+            place = "、".join(places[:3]) + (f" ほか（計{len(places)}か所）" if len(places) > 3 else "")
+            others.append({"aspect": ASPECTS.get(g[0].aspect, g[0].aspect), "part": GROUPS.get(g[0].group or "", ""),
+                           "where": place, "what": describe(g[0]), "severity": round(max(f.severity for f in g), 2),
+                           "count": len(g)})
         return {
-            "scores": {ASPECTS.get(k, "総合"): (None if v is None else round(v)) for k, v in report.scores.items()},
+            "scores": {("総合" if k == "overall" else GROUPS.get(k, k)): (None if v is None else round(v))
+                       for k, v in report.scores.items()},
+            "moments": [{"when": moment_title(m), "what": moment_lines(m)} for m in report.moments],
             "tendencies": [tendency_line(f) for f in report.tendencies],
-            "items": items,
+            "all_findings": others,
         }
 
     def narrate(self, report: Report) -> str:
@@ -70,15 +80,18 @@ class RuleBasedNarrator:
         out = ["## 比較結果", ""]
         if sc.get("overall") is not None:
             out.append(f"**総合スコア: {sc['overall']:.0f} / 100**")
-        parts = [f"{ASPECTS[k]} {v:.0f}" for k, v in sc.items() if k != "overall" and v is not None]
-        out += ["", "観点別: " + " ／ ".join(parts), ""]
+        parts = [f"{GROUPS[k]} {sc[k]:.0f}" for k in GROUPS if sc.get(k) is not None]
+        out += ["", "部位別: " + " ／ ".join(parts), ""]
+        if report.moments:
+            out += ["### 直すところ（ズレの大きい瞬間）", ""]
+            for m in report.moments:
+                out.append(f"**{moment_title(m)}**")
+                out += [f"- {line}" for line in moment_lines(m)]
+                if m.get("image"):
+                    out += ["", f"![{moment_title(m)}]({m['image']})"]
+                out.append("")
+        else:
+            out += ["大きなズレは見つかりませんでした。", ""]
         if p["tendencies"]:
             out += ["### 全体の傾向", ""] + [f"- {t}" for t in p["tendencies"]] + [""]
-        if p["items"]:
-            out += ["### 直すところ（優先度順）", ""]
-            for i, it in enumerate(p["items"], 1):
-                out.append(f"{i}. **{it['where']}**：{it['what']}")
-            out.append("")
-        if not p["tendencies"] and not p["items"]:
-            out += ["大きなズレは見つかりませんでした。", ""]
         return "\n".join(out)

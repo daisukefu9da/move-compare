@@ -51,6 +51,7 @@ def synth_dancer(
     seed: int = 0,
     steps: bool = False,
     step_delay: float | tuple[float, float, float] = 0.0,
+    head_tilt: tuple[float, float, float] | None = None,
 ) -> PoseSequence:
     """合成ダンサーの骨格系列.
 
@@ -62,6 +63,7 @@ def synth_dancer(
     size:       胴の長さ [px]（体格差のテスト用）
     steps:      拍ごとに左右交互に足を上げて、拍の位置で着地する
     step_delay: 足の着地だけを遅らせる秒数. (開始秒, 終了秒, 秒数) ならその区間だけ
+    head_tilt:  (開始秒, 終了秒, 角度) その区間だけ首を横に倒す（正 = 本人から見て右へ）
     """
     rng = np.random.default_rng(seed)
     n = int(duration * fps)
@@ -130,6 +132,15 @@ def synth_dancer(
             h = np.where(k % 2 == parity, lift, 0.0)
             kp[:, KP[f"{side}_ankle"], 1] -= h
             kp[:, KP[f"{side}_knee"], 1] -= h * 0.6
+
+    if head_tilt is not None:
+        s0, s1, deg = head_tilt
+        m = (t >= s0) & (t < s1)
+        neck = (kp[m, KP["left_shoulder"]] + kp[m, KP["right_shoulder"]]) / 2
+        a = np.radians(deg)  # 画像座標（y 下向き）で、本人から見て右（画像の左）へ倒す
+        rot = np.array([[np.cos(a), np.sin(a)], [-np.sin(a), np.cos(a)]])
+        for j in (KP["nose"], KP["left_eye"], KP["right_eye"], KP["left_ear"], KP["right_ear"]):
+            kp[m, j] = neck + (kp[m, j] - neck) @ rot.T
 
     if noise > 0:
         kp += rng.normal(0, noise, kp.shape)

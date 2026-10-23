@@ -16,11 +16,13 @@ import numpy as np
 
 from .core.config import AnalysisConfig
 from .core.counts import fmt_time
+from .core.parts import GROUPS
 from .core.report import ASPECTS, Finding, Report
 from .core.skeleton import JA_NAMES, PoseSequence
 from .feedback.table import KIND_JA, DIRECTION_JA, finding_row, format_value
 
-FILTER_KEYS = ("aspect", "kind", "part", "direction")
+FILTER_KEYS = ("aspect", "group", "kind", "part", "direction")
+LEGACY_ASPECTS = ("steps", "level", "rhythm")  # 廃止した観点. 指定されていても観点では絞らない（kind などで照合）
 CASE_KEYS = {
     "name", "mode", "ref", "user", "video", "ref_pose", "user_pose", "mirror", "bpm", "first_one", "no_beats",
     "audio_sync", "ref_id", "user_id", "ref_point", "user_point", "frame", "ref_start", "ref_end",
@@ -35,7 +37,8 @@ CASE_KEYS = {
 
 @dataclass
 class Expectation:
-    aspect: str
+    aspect: str | None = None
+    group: str | None = None      # 部位グループ（legs / hips / head / arms / timing）
     kind: str | None = None
     part: str | list[str] | None = None
     direction: str | None = None
@@ -54,7 +57,7 @@ class Expectation:
     def matches_kind(self, f: Finding) -> bool:
         for k in FILTER_KEYS:
             want = getattr(self, k)
-            if want is None:
+            if want is None or (k == "aspect" and want in LEGACY_ASPECTS):
                 continue
             have = getattr(f, k)
             if isinstance(want, list):
@@ -65,7 +68,9 @@ class Expectation:
         return True
 
     def describe(self) -> str:
-        parts = [ASPECTS.get(self.aspect, self.aspect)]
+        parts = [GROUPS.get(self.group, self.group)] if self.group else []
+        if self.aspect:
+            parts.append(ASPECTS.get(self.aspect, self.aspect))
         if self.kind:
             parts.append(KIND_JA.get(self.kind, self.kind))
         if self.part:
@@ -98,10 +103,12 @@ def _expectation(d: dict) -> Expectation:
     unknown = set(d) - set(Expectation.__dataclass_fields__)
     if unknown:
         raise ValueError(f"expect/forbid に不明な項目があります: {sorted(unknown)}")
-    if "aspect" not in d:
-        raise ValueError("expect/forbid には aspect（観点）が必要です")
-    if d["aspect"] not in ASPECTS:
+    if not any(k in d for k in ("aspect", "group", "kind")):
+        raise ValueError("expect/forbid には aspect（観点）・group（部位）・kind（項目）のどれかが必要です")
+    if "aspect" in d and d["aspect"] not in ASPECTS:
         raise ValueError(f"aspect は {list(ASPECTS)} のいずれか: {d['aspect']}")
+    if "group" in d and d["group"] not in GROUPS:
+        raise ValueError(f"group は {list(GROUPS)} のいずれか: {d['group']}")
     return Expectation(**d)
 
 
@@ -273,7 +280,7 @@ def validate(path: str, out_dir: str, render: bool = False, use_cache: bool = Tr
         try:
             res = run_case(case, settings, use_cache)
             cr = evaluate(case, res.report, tol)
-            save_outputs(res, case_dir, get_narrator("rule").narrate(res.report), render=render)
+            save_outputs(res, case_dir, get_narrator("rule"), render=render)
             cr.out_dir = case_dir
         except Exception as ex:  # 1 ケースの失敗で全体を止めない
             cr = CaseResult(case, [], [], [], error=f"{type(ex).__name__}: {ex}")
@@ -293,7 +300,8 @@ def _safe(name: str) -> str:
 
 def _finding_brief(f: Finding) -> str:
     where = "全体" if f.is_global else f"{f.label or ''}（{fmt_time(f.t_start)}〜{fmt_time(f.t_end)}）"
-    return f"{where} {ASPECTS[f.aspect]}/{KIND_JA.get(f.kind, f.kind)}/{JA_NAMES.get(f.part or '', '全身')} {format_value(f)}"
+    part = JA_NAMES.get(f.part or "") or GROUPS.get(f.group or "", "全身")
+    return f"{where} {ASPECTS.get(f.aspect, f.aspect)}/{KIND_JA.get(f.kind, f.kind)}/{part} {format_value(f)}"
 
 
 def summary_markdown(results: list[CaseResult]) -> str:
@@ -385,7 +393,7 @@ user_pose = "elbow_bent_pose.json"
   min = -70
   max = -25
   [[case.forbid]]
-  aspect = "timing"
+  kind = "early_late"
   [[case.forbid]]
   aspect = "shape"
   part = "left_elbow"
@@ -404,7 +412,7 @@ user_pose = "half_beat_late_pose.json"
   min = 180
   max = 320
   [[case.expect]]
-  aspect = "steps"
+  group = "legs"
   kind = "landing"
   direction = "late"
   min = 180
@@ -420,7 +428,7 @@ ref_pose = "ref_pose.json"
 user = "landing_late.mp4"
 user_pose = "landing_late_pose.json"
   [[case.expect]]
-  aspect = "steps"
+  group = "legs"
   kind = "landing"
   direction = "late"
   start = "3-1"
@@ -430,7 +438,6 @@ user_pose = "landing_late_pose.json"
   [[case.forbid]]
   aspect = "shape"
   [[case.forbid]]
-  aspect = "steps"
   kind = "landing"
   start = "1-1"
   end = "2-6"
@@ -459,7 +466,7 @@ user_pose = "small_amplitude_pose.json"
   part = ["left_shoulder", "right_shoulder"]
   direction = "smaller"
   [[case.forbid]]
-  aspect = "timing"
+  kind = "early_late"
   [[case.forbid]]
   aspect = "sharpness"
 '''

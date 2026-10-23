@@ -55,6 +55,37 @@ def stance_width(body: np.ndarray) -> np.ndarray:
     return np.abs(body[:, KP["left_ankle"], 0] - body[:, KP["right_ankle"], 0])
 
 
+def _ears(body: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """左右の耳の位置. 取れていないコマは目の位置で代用する."""
+    le, re = body[:, KP["left_ear"]].copy(), body[:, KP["right_ear"]].copy()
+    for ear, eye in ((le, KP["left_eye"]), (re, KP["right_eye"])):
+        bad = ~np.all(np.isfinite(ear), axis=1)
+        ear[bad] = body[bad, eye]
+    return le, re
+
+
+def head_features(body: np.ndarray) -> dict[str, np.ndarray]:
+    """頭（首の動きを含む）の特徴. 首の点は無いので、肩に対する頭の動きとして測る.
+
+    tilt:  左右の傾き [度]. 両耳の線と両肩の線の角度. 正 = 本人から見て右へ傾く（左耳が上がる）
+    turn:  左右の向き [度]. 両耳の間のどこに鼻があるか. 正 = 本人から見て左を向く（正面向きの場合）
+    shift: 横スライド（胴の長さ比）. 両肩の中心に対する頭の中心の横位置. 正 = 本人から見て左
+    nod:   上下（胴の長さ比）. 耳に対する鼻の高さ. 正 = 見上げる
+    """
+    le, re = _ears(body)
+    ls, rs = body[:, KP["left_shoulder"]], body[:, KP["right_shoulder"]]
+    nose = body[:, KP["nose"]]
+    ear_v, sh_v = le - re, ls - rs
+    tilt = np.degrees(np.arctan2(ear_v[:, 1], ear_v[:, 0]) - np.arctan2(sh_v[:, 1], sh_v[:, 0]))
+    tilt = (tilt + 180) % 360 - 180
+    mid = (le + re) / 2
+    half = np.maximum(np.abs(ear_v[:, 0]) / 2, 0.05)
+    turn = np.degrees(np.arctan((nose[:, 0] - mid[:, 0]) / half))
+    shift = mid[:, 0] - (ls[:, 0] + rs[:, 0]) / 2
+    nod = nose[:, 1] - mid[:, 1]
+    return {"tilt": tilt, "turn": turn, "shift": shift, "nod": nod}
+
+
 def velocity(x: np.ndarray, fps: float) -> np.ndarray:
     return np.gradient(x, 1.0 / fps, axis=0)
 
@@ -75,6 +106,8 @@ class Features:
     end_speed: np.ndarray     # (T, 4) 手首・足首の速さ [胴長/秒]
     end_accel: np.ndarray     # (T, 4) 手首・足首の速さの変化率（加速・減速の鋭さ）
     body_speed: np.ndarray    # (T,) 全身の動きの速さ（アクセント検出用）
+    head: dict                # 頭の特徴（tilt / turn / shift / nod）各 (T,)
+    head_conf: np.ndarray     # (T,) 顔の点（鼻・両耳）の信頼度の平均
 
     @property
     def n(self) -> int:
@@ -94,7 +127,7 @@ class Features:
         return np.nan_to_num((x - mean) / std)
 
 
-def compute_features(body: np.ndarray, world: np.ndarray, fps: float) -> Features:
+def compute_features(body: np.ndarray, world: np.ndarray, fps: float, scores: np.ndarray | None = None) -> Features:
     ends = list(END_EFFECTORS.values())
     hip = (world[:, KP["left_hip"]] + world[:, KP["right_hip"]]) / 2
     # 速度・加速度は微分でノイズが増えるので追加で平滑化する
@@ -109,4 +142,7 @@ def compute_features(body: np.ndarray, world: np.ndarray, fps: float) -> Feature
         angles=joint_angles(body), facing=facing_angle(body), lean=torso_lean(body),
         level=level(body), stance=stance_width(body), hip=hip,
         end_speed=end_speed, end_accel=end_accel, body_speed=body_speed,
+        head=head_features(body),
+        head_conf=(np.ones(body.shape[0]) if scores is None
+                   else np.mean(scores[:, [KP["nose"], KP["left_ear"], KP["right_ear"]]], axis=1)),
     )

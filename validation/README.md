@@ -73,7 +73,8 @@ user = "videos/elbow_bent.mp4"
 
 | 項目 | 内容 |
 |---|---|
-| `aspect`（必須） | 観点（下表） |
+| `aspect` | 観点（下表） |
+| `group` | 部位（`legs` / `hips` / `head` / `arms` / `timing`） |
 | `kind` | 項目（下表）。省略すると観点内のすべて |
 | `part` | 部位。リストならどれか 1 つで可 |
 | `direction` | ズレの向き |
@@ -81,19 +82,26 @@ user = "videos/elbow_bent.mp4"
 | `start_s`, `end_s` | 秒で範囲を指定する場合（手本動画の時刻） |
 | `min`, `max` | ズレ量の範囲（符号付き。単位は下表） |
 
-| aspect | kind | part | direction | ズレ量の単位 |
-|---|---|---|---|---|
-| `shape`（身体の形） | `angle` | `left/right_elbow`, `_shoulder`, `_hip`, `_knee` | `smaller`（曲がっている・腕/脚が下がっている）/ `larger` | 度（レビュー対象 − 手本） |
-| `timing`（手本とのタイミング） | `early_late` | - | `late` / `early` | ms（正 = 遅い） |
-| `rhythm`（リズム） | **廃止**（検出されない） | | | |
-| `steps`（ステップ） | `landing` | `left/right_ankle`（片足だけの場合） | `late` / `early` | ms |
-| | `stance` | - | `wider` / `narrower` | 胴の長さ比 |
-| | `travel` | - | `less` / `more` | 胴の長さ比 |
-| `amplitude`（動きの大きさ） | `amplitude` | `left/right_wrist`, `left/right_ankle` | `smaller` / `larger` | 手本に対する比（0.7 = 70%） |
-| `sharpness`（キレ） | `sharpness` | 同上 | `weaker` | 手本に対する比 |
-| `level`（レベル・向き） | `level` | - | `higher` / `lower` | 胴の長さ比 |
-| | `facing` | - | `more_turned` / `less_turned` | 度 |
-| | `lean` | - | `right` / `left` | 度 |
+| group（部位） | aspect（観点） | kind（項目） | part | direction | ズレ量の単位 |
+|---|---|---|---|---|---|
+| `arms` / `legs` | `shape` | `angle` | `left/right_elbow`, `_shoulder`（腕）, `_hip`, `_knee`（足） | `smaller`（曲がっている・腕/脚が下がっている）/ `larger` | 度（レビュー対象 − 手本） |
+| `arms` / `legs` | `amplitude` | `amplitude` | `left/right_wrist`（腕）, `left/right_ankle`（足） | `smaller` / `larger` | 手本に対する比（0.7 = 70%） |
+| `arms` / `legs` | `sharpness` | `sharpness` | 同上 | `weaker` | 手本に対する比 |
+| `legs` | `timing` | `landing` | `left/right_ankle`（片足だけの場合） | `late` / `early` | ms |
+| `legs` | `shape` | `stance` | - | `wider` / `narrower` | 胴の長さ比 |
+| `hips` | `shape` | `level` | - | `higher` / `lower` | 胴の長さ比 |
+| `hips` | `shape` | `facing` | - | `more_turned` / `less_turned` | 度 |
+| `hips` | `shape` | `lean` | - | `right` / `left` | 度 |
+| `hips` | `amplitude` | `travel` | - | `less` / `more` | 胴の長さ比 |
+| `head` | `shape` | `head_tilt` | - | `right` / `left`（本人から見て） | 度 |
+| `head` | `shape` | `head_turn` | - | `left` / `right`（本人から見て） | 度 |
+| `head` | `shape` | `head_shift` | - | `left` / `right`（本人から見て） | 胴の長さ比 |
+| `head` | `shape` | `head_nod` | - | `up` / `down` | 胴の長さ比 |
+| `timing` | `timing` | `early_late` | - | `late` / `early` | ms（正 = 遅い） |
+
+`expect` / `forbid` には `aspect`・`group`・`kind` のどれかが必要です。廃止した観点（`steps`・`level`・`rhythm`）を
+`aspect` に書いた場合は観点では絞らず、`kind` などで照合します（以前のケースファイルもそのまま使えます）。
+部位の重みを 0 にした部位は検出されません。
 
 ## テスト動画を撮るときの注意
 

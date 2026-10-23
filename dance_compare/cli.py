@@ -60,11 +60,11 @@ def _rhythm(args) -> Rhythm:
 
 def _finish(result, args):
     narrator = get_narrator(args.narrator)
-    text = narrator.narrate(result.report)
+    paths = save_outputs(result, args.out, narrator, render=not args.no_video,
+                         progress=lambda i, n: _progress("比較動画", i, n))
+    text = paths["text"]
     if getattr(narrator, "last_error", None):
         print(f"[注意] {narrator.last_error}", file=sys.stderr)
-    paths = save_outputs(result, args.out, text, render=not args.no_video,
-                         progress=lambda i, n: _progress("比較動画", i, n))
     for n in result.notes:
         print(f"[メモ] {n}", file=sys.stderr)
     print(text)

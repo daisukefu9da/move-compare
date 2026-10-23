@@ -100,7 +100,7 @@ def test_detects_small_and_soft_movement():
 def test_tempo_difference_is_absorbed_when_not_synced():
     user = synth_dancer(tempo=0.9, delay_s=0.3, duration=16 / 0.9 + 0.3)
     r = run(user, synced=False, user_beats=0.3 + BEATS / 0.9)
-    assert r.scores["shape"] > 90
+    assert r.scores["arms"] > 90 and r.scores["legs"] > 90
     assert not any(f.kind == "early_late" for f in r.findings)
     assert 1.05 < r.meta["tempo_ratio"] < 1.15
 
@@ -173,7 +173,7 @@ def test_body_proportions_do_not_count_as_level_difference():
         kp[:, j, 1] += (kp[:, j, 1] - kp[:, 11, 1]) * 0.25
     r = run(user)
     assert not [f for f in r.findings + r.tendencies if f.kind == "level"]
-    assert r.scores["level"] > 95
+    assert r.scores["hips"] > 95
 
 
 def test_scores_follow_thresholds():
@@ -184,10 +184,41 @@ def test_scores_follow_thresholds():
     strict = run(user)
     loose = compare(synth_dancer(), user, AnalysisConfig(amplitude_tolerance=0.45), ref_beats=BEATS,
                     user_beats=BEATS, synced=True)
-    assert loose.scores["amplitude"] > strict.scores["amplitude"] + 10
+    assert loose.scores["arms"] > strict.scores["arms"] + 5  # 腕のスコアには肩の角度も入るので上がり幅は小さめ
     assert run(synth_dancer(noise=2.0)).scores["overall"] > 98
 
 
 def test_old_config_keys_are_converted():
     c = AnalysisConfig.from_dict({"amplitude_ratio_low": 0.8, "sharpness_ratio_low": 0.6, "score_scale_angle_deg": 30})
     assert abs(c.amplitude_tolerance - 0.2) < 1e-9 and abs(c.sharpness_tolerance - 0.4) < 1e-9
+
+
+def test_part_weights():
+    user = synth_dancer(elbow_bend=(4.5, 6.5, 50), noise=1.0)
+    r = run(user)
+    assert r.scores["arms"] < 100 and any(f.group == "arms" for f in r.findings)
+    r0 = compare(synth_dancer(), user, AnalysisConfig(weight_arms=0), ref_beats=BEATS, user_beats=BEATS, synced=True)
+    assert r0.scores["arms"] is None and r0.scores["overall"] > 99  # 腕を評価しない
+    assert not any(f.group == "arms" for f in r0.findings + r0.tendencies) and not r0.moments
+    r2 = compare(synth_dancer(), user, AnalysisConfig(weight_arms=3), ref_beats=BEATS, user_beats=BEATS, synced=True)
+    assert r2.scores["overall"] < r.scores["overall"]  # 腕を重く見ると総合点が下がる
+
+
+def test_head_tilt_is_detected():
+    r = run(synth_dancer(head_tilt=(4.5, 8.5, 25), noise=1.0))
+    heads = [f for f in r.findings if f.kind == "head_tilt"]
+    assert heads and heads[0].group == "head" and "2エイト目" in heads[0].label
+    assert abs(abs(heads[0].value) - 25) < 8
+    assert r.scores["head"] < 97  # 16 秒のうち 4 秒だけ倒している
+    assert not [f for f in r.findings if f.group in ("arms", "legs")]
+
+
+def test_moments_pick_the_biggest_distinct_places():
+    user = synth_dancer(elbow_bend=(4.5, 5.5, 60), head_tilt=(10.5, 12.5, 30), noise=1.0)
+    r = run(user)
+    assert 1 <= len(r.moments) <= 3
+    kinds = [m["items"][0]["kind"] for m in r.moments]
+    assert "angle" in kinds and "head_tilt" in kinds
+    m = next(m for m in r.moments if m["items"][0]["kind"] == "angle")
+    assert 4.4 <= m["t"] <= 5.6 and 8 in m["joints"]  # 右肘
+    assert m["rank"] == 1 or r.moments[0]["score"] >= m["score"]
