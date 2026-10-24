@@ -26,8 +26,8 @@ class AnalysisConfig:
     warp_smooth_s: float = 0.25        # 対応づけ結果の平滑化 [秒]
 
     # --- 区間（指摘の単位） ---
-    window_counts: int = 2             # 何カウントごとに区切って評価するか
-    window_s_fallback: float = 1.0     # 拍が取れないときの区間長 [秒]
+    window_counts: int = 2             # 何カウントごとに区切って評価するか（拍・カウントを使う場合）
+    window_s_fallback: float = 1.0     # 何秒ごとに区切って評価するか（既定. 拍・カウントは使わない）
 
     # --- 指摘のしきい値 ---
     angle_threshold_deg: float = 20.0      # 関節角度の差

@@ -46,7 +46,7 @@ def _two_people_tracks(ref, user):
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
 def test_single_video_compares_only_the_choreography(tmp_path):
-    from dance_compare.pipeline import Pick, analyze_single_video
+    from dance_compare.pipeline import Pick, Rhythm, analyze_single_video
     from dance_compare.synth import write_synth_video
 
     ref, user = pair(elbow_bend=(10.5, 12.5, 50))
@@ -58,8 +58,14 @@ def test_single_video_compares_only_the_choreography(tmp_path):
     res = analyze_single_video(video, Pick(1), Pick(2), tracks=ts)
     assert abs(res.report.meta["ref_t0"] - DANCE_START) < 0.7
     assert any("比較した区間" in n for n in res.notes)
+    assert res.report.count_grid() is None  # 既定ではカウント表示を使わない（場所は時刻）
+    elbow = [f for f in res.report.findings if f.part == "right_elbow"]
+    assert elbow and elbow[0].t_start < 12.0 and elbow[0].t_end > 11.0
+
+    # 拍を使う場合は、振付の始まりが「1エイト目の1」になる
+    res = analyze_single_video(video, Pick(1), Pick(2), tracks=ts, rhythm=Rhythm(detect=True))
     g = res.report.count_grid()
-    assert abs(g.first_one - DANCE_START) < 0.05  # 振付の始まりが「1エイト目の1」
+    assert abs(g.first_one - DANCE_START) < 0.05
     elbow = [f for f in res.report.findings if f.part == "right_elbow"]
     assert elbow and "2エイト目" in elbow[0].label  # 10.5 秒 = 2エイト目の1
 

@@ -8,7 +8,7 @@ import copy
 from dataclasses import asdict
 
 from .config import AnalysisConfig
-from .counts import CountGrid
+from .counts import CountGrid, fmt_time
 from .dtw import dtw, monotonic, pairwise_cost, path_to_warp
 from .features import Features, compute_features
 from .parts import ASPECT_OF_KIND, GROUPS, group_of, joints_of
@@ -308,16 +308,19 @@ def compare(
         w["travel_ref"] = r_move.tolist()
         w["travel_user"] = u_move.tolist()
         w["travel_diff"] = float(np.linalg.norm(u_move - r_move))
-        # 動きの大きさ（末端の振れ幅）とキレ（加速度）. 速度・加速度は各自の時間軸で微分済みの値を対応づけて使う
-        wm = warp[m]
+        # 動きの大きさ（末端の振れ幅）とキレ（加速度）. 速度・加速度は各自の時間軸で微分済みの値を対応づけて使う.
+        # 区切りが動きの途中を切ると一部だけで比べることになるので、前後に区間の 1/4 ずつ余裕を持たせて測る
+        pad = 0.25 * (b - a)
+        me = (t_abs >= a - pad) & (t_abs < b + pad)
+        wm = warp[me]
         amp, sharp = {}, {}
         for k, name in enumerate(END_NAMES):
             j = END_EFFECTORS[name]
-            r_ext = float(np.linalg.norm(np.ptp(R.body[m, j], axis=0)))
+            r_ext = float(np.linalg.norm(np.ptp(R.body[me, j], axis=0)))
             u_ext = float(np.linalg.norm(np.ptp(_sample(U.body[:, j], wm), axis=0)))
             amp[name] = u_ext / r_ext if r_ext >= 0.3 else np.nan
             # キレ = 加速度 / 速さ（動きの大きさに依存しない「急さ」）
-            r_sharp = _abruptness(R.end_accel[m, k], R.end_speed[m, k])
+            r_sharp = _abruptness(R.end_accel[me, k], R.end_speed[me, k])
             u_sharp = _abruptness(_sample(U.end_accel[:, k], wm), _sample(U.end_speed[:, k], wm))
             sharp[name] = u_sharp / r_sharp if r_ext >= 0.5 and r_sharp > 0 else np.nan
         w["amplitude_ratio"] = amp
@@ -584,7 +587,8 @@ def _moments(raw: list[Finding], windows: list[dict], series: dict, R: Features,
             while j in has:
                 same_place.add(j)
                 j += step
-        repeats = [windows[j]["label"] or f"{windows[j]['t_start']:.1f}秒" for j in sorted(has - same_place)]
+        repeats = [windows[j]["label"] or f"{fmt_time(windows[j]['t_start'])}〜{fmt_time(windows[j]['t_end'])}"
+                   for j in sorted(has - same_place)]
         out.append({
             "rank": rank,
             "t": float(t_abs[k]), "user_t": float(t_user_abs[k]),

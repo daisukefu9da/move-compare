@@ -36,9 +36,11 @@ def tendency_line(f: Finding) -> str:
 
 
 def moment_title(m: dict) -> str:
-    """「① 2エイト目の3カウント（0:32.4）」."""
+    """「① 0:32.4 付近」（カウント表示を使う場合は「① 2エイト目の3カウント（0:32.4）」）."""
     mark = CIRCLED[m["rank"] - 1] if m["rank"] <= len(CIRCLED) else f"{m['rank']}."
-    return f"{mark} {m['label'] or ''}（{fmt_time(m['t'])}）".replace(" （", "（")
+    if m.get("label"):
+        return f"{mark} {m['label']}（{fmt_time(m['t'])}）"
+    return f"{mark} {fmt_time(m['t'])} 付近"
 
 
 def moment_lines(m: dict) -> list[str]:

@@ -39,9 +39,9 @@ def _common(p: argparse.ArgumentParser):
     p.add_argument("--config", help="解析パラメータの TOML ファイル")
     p.add_argument("--backend", default="yolo", choices=["yolo", "mediapipe"])
     p.add_argument("--mirror", action="store_true", help="手本を左右反転して比較（向かい合わせの手本）")
-    p.add_argument("--bpm", type=float, help="BPM を手動で指定（音声から検出しない）")
-    p.add_argument("--first-one", type=float, help="手本動画で「1エイト目の1」に当たる時刻 [秒]")
-    p.add_argument("--no-beats", action="store_true", help="拍を使わない（秒で表示）")
+    p.add_argument("--bpm", type=float, help="BPM を指定してカウント表示を使う（既定は使わず時刻で表示）")
+    p.add_argument("--first-one", type=float, help="手本動画で「1エイト目の1」に当たる時刻 [秒]（--bpm/--beats と使う）")
+    p.add_argument("--beats", action="store_true", help="音声から拍を自動検出してカウント表示を使う（不正確なことがある）")
     p.add_argument("--narrator", default="rule", choices=["rule", "gemini"], help="指摘文の作り方")
     p.add_argument("--no-video", action="store_true", help="比較動画を作らない")
     p.add_argument("--no-cache", action="store_true", help="骨格推定のキャッシュを使わない")
@@ -55,7 +55,7 @@ def _config(args) -> AnalysisConfig:
 
 
 def _rhythm(args) -> Rhythm:
-    return Rhythm(bpm=args.bpm, first_one=args.first_one, detect=not args.no_beats)
+    return Rhythm(bpm=args.bpm, first_one=args.first_one, detect=args.beats)
 
 
 def _finish(result, args):

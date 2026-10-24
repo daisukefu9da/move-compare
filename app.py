@@ -62,13 +62,6 @@ with st.sidebar:
                            help="mediapipe は 1 人用。yolo は複数人の追跡ができます")
     mirror = st.checkbox("手本を左右反転して比較", help="手本が向かい合わせ（鏡写しでない）で撮影されている場合")
 
-    st.subheader("拍・カウント")
-    beat_mode = st.radio("拍の取り方", ["音声から自動検出", "BPM を指定", "使わない"], horizontal=False)
-    bpm = None
-    if beat_mode == "BPM を指定":
-        bpm = st.number_input("BPM", 40.0, 240.0, 120.0, 0.5)
-    first_one = st.number_input("「1エイト目の1」の時刻 [秒]（手本動画, 0 なら自動）", 0.0, 3600.0, 0.0, 0.01)
-
     st.subheader("時間合わせ")
     audio_sync = st.checkbox("音声で 2 本の動画を同期する", value=True, disabled=mode != "2動画モード")
     open_ends = st.checkbox("レビュー対象の前後に余分な部分がある", value=False, disabled=mode != "2動画モード",
@@ -113,9 +106,7 @@ with st.sidebar:
         head_nod_thr = st.slider("頭の上下の差 [胴の長さの%]", 3, 30, int(round(base.head_nod_threshold * 100)), 1)
         full_ratio = st.slider("減点しないズレの範囲 [しきい値に対する割合]", 0.0, 0.9, base.score_full_ratio, 0.05,
                                help="測定誤差を見込んで、しきい値のこの割合以下のズレは減点しない")
-        window_counts = st.select_slider("評価の区切り [カウント]", [1, 2, 4, 8], base.window_counts)
-        accent_mode = st.radio("動きのアクセント", ["peak", "hit"], index=0 if base.accent_mode == "peak" else 1,
-                               format_func=lambda m: "速度のピーク" if m == "peak" else "急停止（ヒット）")
+        window_s = st.select_slider("評価の区切り [秒]", [0.5, 1.0, 1.5, 2.0, 3.0, 4.0], base.window_s_fallback)
 
     st.subheader("言語化")
     narrator_name = st.radio("指摘文", ["rule", "gemini"],
@@ -136,8 +127,8 @@ cfg = base.replace(angle_threshold_deg=angle_thr, timing_threshold_ms=timing_thr
                    head_shift_threshold=head_shift_thr / 100, head_nod_threshold=head_nod_thr / 100,
                    weight_legs=w_legs, weight_hips=w_hips, weight_head=w_head, weight_arms=w_arms,
                    weight_timing=w_timing,
-                   window_counts=window_counts, accent_mode=accent_mode, dtw_open_ends=open_ends)
-rhythm = Rhythm(bpm=bpm, first_one=first_one or None, detect=beat_mode != "使わない")
+                   window_s_fallback=window_s, dtw_open_ends=open_ends)
+rhythm = Rhythm()  # 拍・カウントは使わない（自動検出が不安定なため. 場所は時刻で示す）
 
 
 class Progress:

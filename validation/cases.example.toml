@@ -9,8 +9,9 @@
 [settings]
 # 全ケース共通の設定（ケース側に同じ項目を書けば上書き）
 backend = "yolo"
-count_tolerance = 1        # カウント範囲の前後 1 カウントまでは「正しい場所」とみなす
-first_one = 2.0            # お手本動画で「1エイト目の1」に当たる時刻 [秒]（必ず指定するのがおすすめ）
+tolerance_s = 0.5          # 範囲の前後 0.5 秒までは「正しい場所」とみなす
+# 場所はお手本動画の時刻（秒）で書く. カウントで書きたい場合は bpm と first_one（「1エイト目の1」の時刻）を書き、
+# start = "2-1" / end = "2-8" の形で指定する（count_tolerance = 1 で前後 1 カウントの余裕）
 # bpm = 120                # 拍を自動検出せず BPM で指定する場合
 # config = "../tuning.toml"  # 解析パラメータ
 # base_dir = "videos"      # 動画パスの基準フォルダ（既定はこのファイルのあるフォルダ）
@@ -18,7 +19,7 @@ first_one = 2.0            # お手本動画で「1エイト目の1」に当た�
 # ---------------------------------------------------------------------------
 [[case]]
 name = "elbow_bent"
-note = "2エイト目の1〜8カウントで、わざと右肘を曲げたままにする"
+note = "8〜12 秒あたり（2エイト目）で、わざと右肘を曲げたままにする"
 ref = "videos/ref.mp4"
 user = "videos/elbow_bent.mp4"
   [[case.expect]]            # 検出されるべきこと
@@ -26,8 +27,8 @@ user = "videos/elbow_bent.mp4"
   kind = "angle"             # 項目（省略可）
   part = "right_elbow"       # 部位（省略可）
   direction = "smaller"      # 向き: 角度が小さい = 深く曲がっている
-  start = "2-1"              # 2エイト目の1カウントから
-  end = "2-8"                # 2エイト目の8カウントまで（含む）
+  start_s = 8.0              # お手本動画の 8.0 秒から
+  end_s = 12.0               # 12.0 秒まで
   max = -20                  # ズレ量 [°] が -20 以下（20°以上曲がっている）
   [[case.forbid]]            # 検出されるべきでないこと
   kind = "early_late"        # 手本との時間差
@@ -50,22 +51,22 @@ user = "videos/half_beat_late.mp4"
 # ---------------------------------------------------------------------------
 [[case]]
 name = "landing_late"
-note = "3エイト目のステップの着地だけ遅らせる"
+note = "12〜16 秒あたり（3エイト目）のステップの着地だけ遅らせる"
 ref = "videos/ref.mp4"
 user = "videos/landing_late.mp4"
   [[case.expect]]
   group = "legs"             # 部位（足）
   kind = "landing"           # 着地タイミング
   direction = "late"
-  start = "3-1"
-  end = "3-8"
+  start_s = 12.0
+  end_s = 16.0
   min = 60
   [[case.forbid]]
   aspect = "shape"
   [[case.forbid]]            # 他の区間では着地のズレが出ないこと
   kind = "landing"
-  start = "1-1"
-  end = "2-6"
+  start_s = 0.0
+  end_s = 11.0
 
 # ---------------------------------------------------------------------------
 [[case]]
@@ -94,5 +95,5 @@ user = "videos/small_amplitude.mp4"
 #   [[case.expect]]
 #   aspect = "shape"
 #   part = "left_knee"
-#   start = "1-5"
-#   end = "1-8"
+#   start_s = 3.0
+#   end_s = 5.0

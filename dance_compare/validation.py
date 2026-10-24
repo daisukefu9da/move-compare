@@ -24,10 +24,10 @@ from .feedback.table import KIND_JA, DIRECTION_JA, finding_row, format_value
 FILTER_KEYS = ("aspect", "group", "kind", "part", "direction")
 LEGACY_ASPECTS = ("steps", "level", "rhythm")  # 廃止した観点. 指定されていても観点では絞らない（kind などで照合）
 CASE_KEYS = {
-    "name", "mode", "ref", "user", "video", "ref_pose", "user_pose", "mirror", "bpm", "first_one", "no_beats",
+    "name", "mode", "ref", "user", "video", "ref_pose", "user_pose", "mirror", "bpm", "first_one", "beats", "no_beats",
     "audio_sync", "ref_id", "user_id", "ref_point", "user_point", "frame", "ref_start", "ref_end",
     "user_start", "user_end", "start", "end", "backend", "config", "count_tolerance", "fail_on_unexpected",
-    "expect", "forbid", "note", "auto_range",
+    "expect", "forbid", "note", "auto_range", "tolerance_s",
 }
 
 
@@ -147,7 +147,8 @@ def run_case(case: Case, settings: dict, use_cache: bool = True):
         return None if v is None else (v if os.path.isabs(v) else os.path.join(base, v))
 
     cfg = AnalysisConfig.load(path("config")) if p.get("config") else AnalysisConfig()
-    rhythm = Rhythm(bpm=p.get("bpm"), first_one=p.get("first_one"), detect=not p.get("no_beats", False))
+    rhythm = Rhythm(bpm=p.get("bpm"), first_one=p.get("first_one"),
+                    detect=bool(p.get("beats", False)) and not p.get("no_beats", False))
     backend = p.get("backend", "yolo")
 
     def pick(who):
@@ -181,17 +182,21 @@ def _count_pos(s: str) -> float:
     return (int(e) - 1) * 8 + (int(c) - 1) + (0.5 if half else 0.0)
 
 
-def expected_range(e: Expectation, report: Report, tolerance_counts: float) -> tuple[float, float]:
-    """期待する区間 [t0, t1)（手本動画の時刻）. 前後に tolerance_counts カウントの余裕を持たせる."""
+def expected_range(e: Expectation, report: Report, tolerance_counts: float,
+                   tolerance_s: float = 0.5) -> tuple[float, float]:
+    """期待する区間 [t0, t1)（手本動画の時刻）.
+
+    秒で指定した場合は前後に tolerance_s 秒、カウントで指定した場合は tolerance_counts カウントの余裕を持たせる。
+    """
     if e.start_s is not None or e.end_s is not None:
-        g = report.count_grid()
-        pad = tolerance_counts * (g.interval if g else 0.5)
+        pad = tolerance_s
         t0 = e.start_s if e.start_s is not None else -np.inf
         t1 = e.end_s if e.end_s is not None else np.inf
         return t0 - pad, t1 + pad
     g = report.count_grid()
     if g is None:
-        raise ValueError("拍が検出されていないためカウントで照合できません（start_s / end_s を使ってください）")
+        raise ValueError("カウント（start/end）で照合するには拍が必要です。start_s / end_s（秒）を使うか、"
+                         "ケースに bpm（+ first_one）または beats = true を書いてください")
     p0 = _count_pos(e.start or e.end)
     p1 = _count_pos(e.end or e.start) + 1  # 終わりのカウントを含む
     return float(g.time_of(p0 - tolerance_counts)), float(g.time_of(p1 + tolerance_counts))
@@ -209,12 +214,12 @@ def _in_value_range(e: Expectation, f: Finding) -> bool:
     return (e.min is None or f.value >= e.min) and (e.max is None or f.value <= e.max)
 
 
-def check_expectation(e: Expectation, report: Report, tol: float) -> Check:
+def check_expectation(e: Expectation, report: Report, tol: float, tol_s: float = 0.5) -> Check:
     same = [f for f in report.tendencies + report.findings if e.matches_kind(f)]
     if not same:
         return Check(e, "未検出")
     if e.located:
-        t0, t1 = expected_range(e, report, tol)
+        t0, t1 = expected_range(e, report, tol, tol_s)
         here = [f for f in same if not f.is_global and f.t_start < t1 and f.t_end > t0]
         if not here:
             return Check(e, "場所違い", same)
@@ -227,10 +232,10 @@ def check_expectation(e: Expectation, report: Report, tol: float) -> Check:
     return Check(e, "値が範囲外", here)
 
 
-def check_forbid(e: Expectation, report: Report, tol: float) -> Check:
+def check_forbid(e: Expectation, report: Report, tol: float, tol_s: float = 0.5) -> Check:
     hits = [f for f in report.tendencies + report.findings if e.matches_kind(f)]
     if e.located and hits:
-        t0, t1 = expected_range(e, report, tol)
+        t0, t1 = expected_range(e, report, tol, tol_s)
         hits = [f for f in hits if f.is_global or (f.t_start < t1 and f.t_end > t0)]
     return Check(e, "NG（検出された）" if hits else "OK", hits, not hits)
 
@@ -255,9 +260,9 @@ class CaseResult:
         return ok
 
 
-def evaluate(case: Case, report: Report, tol: float) -> CaseResult:
-    checks = [check_expectation(e, report, tol) for e in case.expect]
-    forbids = [check_forbid(e, report, tol) for e in case.forbid]
+def evaluate(case: Case, report: Report, tol: float, tol_s: float = 0.5) -> CaseResult:
+    checks = [check_expectation(e, report, tol, tol_s) for e in case.expect]
+    forbids = [check_forbid(e, report, tol, tol_s) for e in case.forbid]
     # どの期待にも当てはまらない検出（誤検出の候補）
     unexpected = [f for f in report.tendencies + report.findings
                   if not any(e.matches_kind(f) for e in case.expect)]
@@ -276,10 +281,11 @@ def validate(path: str, out_dir: str, render: bool = False, use_cache: bool = Tr
             continue
         log(f"▶ {case.name}")
         tol = float(case.params.get("count_tolerance", settings.get("count_tolerance", 1)))
+        tol_s = float(case.params.get("tolerance_s", settings.get("tolerance_s", 0.5)))
         case_dir = os.path.join(out_dir, _safe(case.name))
         try:
             res = run_case(case, settings, use_cache)
-            cr = evaluate(case, res.report, tol)
+            cr = evaluate(case, res.report, tol, tol_s)
             save_outputs(res, case_dir, get_narrator("rule"), render=render)
             cr.out_dir = case_dir
         except Exception as ex:  # 1 ケースの失敗で全体を止めない
@@ -368,17 +374,17 @@ def write_summary(results: list[CaseResult], out_dir: str) -> None:
 # ---------------------------------------------------------------------------
 
 SYNTH_CASES = '''# 合成した棒人間による検証セット（make-validation-set で生成）
-# 手本: 120 BPM, 拍は 0.5 秒から（1エイト目の1 = 0.5 秒）。足は拍ごとに左右交互に着地する。
+# 手本: 120 BPM, 拍は 0.5 秒から（1エイト目の1 = 0.5 秒, 1 エイト = 4 秒）。足は拍ごとに左右交互に着地する。
+# 場所は手本動画の時刻（秒）で指定する（カウント表示は使わないため）。
 # レビュー対象の動画は手本より 1.0 秒遅れて撮影を始めた想定（音声で同期される）。
 # 骨格は *_pose.json を使う（骨格推定はしない）。
 
 [settings]
-count_tolerance = 1   # カウント範囲の前後 1 カウントまでは「正しい場所」とみなす
-first_one = 0.5       # 手本動画で「1エイト目の1」の時刻（自動検出だと 1 拍ずれることがあるので明示）
+tolerance_s = 0.5     # 範囲の前後 0.5 秒までは「正しい場所」とみなす
 
 [[case]]
 name = "elbow_bent"
-note = "2エイト目の1〜4カウントだけ、右肘を 45° 曲げたままにする"
+note = "4.5〜6.5 秒（2エイト目の1〜4カウント）だけ、右肘を 45° 曲げたままにする"
 ref = "ref.mp4"
 ref_pose = "ref_pose.json"
 user = "elbow_bent.mp4"
@@ -388,8 +394,8 @@ user_pose = "elbow_bent_pose.json"
   kind = "angle"
   part = "right_elbow"
   direction = "smaller"
-  start = "2-1"
-  end = "2-4"
+  start_s = 4.5
+  end_s = 6.5
   min = -70
   max = -25
   [[case.forbid]]
@@ -422,7 +428,7 @@ user_pose = "half_beat_late_pose.json"
 
 [[case]]
 name = "landing_late"
-note = "3エイト目の1〜8カウントだけ、足の着地を 150ms 遅らせる（上半身は手本どおり）"
+note = "8.5〜12.5 秒（3エイト目）だけ、足の着地を 150ms 遅らせる（上半身は手本どおり）"
 ref = "ref.mp4"
 ref_pose = "ref_pose.json"
 user = "landing_late.mp4"
@@ -431,16 +437,16 @@ user_pose = "landing_late_pose.json"
   group = "legs"
   kind = "landing"
   direction = "late"
-  start = "3-1"
-  end = "3-8"
+  start_s = 8.5
+  end_s = 12.5
   min = 100
   max = 220
   [[case.forbid]]
   aspect = "shape"
   [[case.forbid]]
   kind = "landing"
-  start = "1-1"
-  end = "2-6"
+  start_s = 0.5
+  end_s = 7.5
 
 [[case]]
 name = "small_amplitude"

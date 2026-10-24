@@ -33,11 +33,15 @@ class Pick:
 
 @dataclass
 class Rhythm:
-    """拍の情報の指定. 何も指定しなければ音声から自動検出する."""
+    """拍・カウントの指定. 既定では使わない（場所は時刻で示し、評価は 1 秒ごとに区切る）.
+
+    拍の自動検出は曲によって倍・半分のテンポになったり「1」の位置がずれたりして、カウント表示が
+    間違うことが多かったため、既定では使わない。bpm（+ first_one）を指定するか detect=True で使える。
+    """
 
     bpm: float | None = None          # 手動指定の BPM
     first_one: float | None = None    # 手本動画上で「1エイト目の 1」の時刻 [秒]
-    detect: bool = True               # 音声から拍を検出する
+    detect: bool = False              # 音声から拍を自動検出する
 
 
 @dataclass
