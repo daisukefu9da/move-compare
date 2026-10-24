@@ -86,9 +86,9 @@ class RuleBasedNarrator:
             out += ["### 直すところ（ズレの大きい瞬間）", ""]
             for m in report.moments:
                 out.append(f"**{moment_title(m)}**")
-                out += [f"- {line}" for line in moment_lines(m)]
                 if m.get("image"):
-                    out += ["", f"![{moment_title(m)}]({m['image']})"]
+                    out += ["", f'<img src="{m["image"]}" width="480">', ""]
+                out += [f"- {line}" for line in moment_lines(m)]
                 out.append("")
         else:
             out += ["大きなズレは見つかりませんでした。", ""]

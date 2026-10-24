@@ -344,24 +344,23 @@ if "last" in st.session_state:
     for c, k in zip(cols[1:], keys):
         c.metric(GROUPS[k], "-" if sc[k] is None else f"{sc[k]:.0f}")
 
-    # 直すところ（ズレの大きい瞬間の上位）
+    if "video" in paths and os.path.exists(paths["video"]):
+        st.subheader("比較動画")
+        st.video(paths["video"])
+
+    # 直すところ（ズレの大きい瞬間の上位）: 左に静止画、右に修正点
     st.subheader("直すところ")
     if not rep.moments:
         st.success("大きなズレは見つかりませんでした。")
     for m in rep.moments:
         img = os.path.join(out_dir, m.get("image") or "")
+        left, right = st.columns([3, 2], vertical_alignment="center")
         if m.get("image") and os.path.exists(img):
-            st.image(img, width="stretch")
-        else:
-            st.markdown(f"**{moment_title(m)}**")
-            for line in moment_lines(m):
-                st.markdown(f"- {line}")
+            left.image(img, width="stretch")
+        right.markdown(f"**{moment_title(m)}**\n\n" + "\n".join(f"- {line}" for line in moment_lines(m)))
 
     if rep.tendencies:
         st.markdown("**全体の傾向**\n\n" + "\n".join(f"- {tendency_line(f)}" for f in rep.tendencies))
-    if "video" in paths and os.path.exists(paths["video"]):
-        st.subheader("比較動画")
-        st.video(paths["video"])
 
     with st.expander("詳細（すべての指摘・時系列）"):
         rows = [{"範囲": r["scope"], "カウント": r["label"], "開始[秒]": r["t_start"], "終了[秒]": r["t_end"],

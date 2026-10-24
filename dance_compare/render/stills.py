@@ -42,13 +42,14 @@ def _panel(img: np.ndarray, kp: np.ndarray, color, marks: list[int], height: int
     crop = cv2.resize(crop, (max(2, int(round(crop.shape[1] * s))), height), interpolation=cv2.INTER_AREA)
     k = (kp - np.array([x0, y0])) * s
     _draw_skeleton(crop, k, color, thickness=3)
+    r = max(8, int(height * 0.035))  # 印の大きさは画像の高さに合わせる
     for j in marks:
         if np.all(np.isfinite(k[j])):
             c = tuple(int(v) for v in k[j])
             overlay = crop.copy()
-            cv2.circle(overlay, c, 22, MARK_COLOR, -1, cv2.LINE_AA)
+            cv2.circle(overlay, c, r, MARK_COLOR, -1, cv2.LINE_AA)
             crop[:] = cv2.addWeighted(overlay, 0.35, crop, 0.65, 0)
-            cv2.circle(crop, c, 22, MARK_COLOR, 4, cv2.LINE_AA)
+            cv2.circle(crop, c, r, MARK_COLOR, 3, cv2.LINE_AA)
     return _text(crop, [(title, font, (255, 255, 255))], (10, 8), stroke=True)
 
 
@@ -83,11 +84,9 @@ def _wrap(text: str, font, width: int) -> list[str]:
 
 
 def render_moments(report: Report, ref_video: str, user_video: str, ref_seq: PoseSequence,
-                   user_seq: PoseSequence, out_dir: str, height: int = 560) -> list[str]:
+                   user_seq: PoseSequence, out_dir: str, height: int = 400) -> list[str]:
     """report.moments の各瞬間の静止画を out_dir に書き出し、各 moment に "image"（ファイル名）を入れる."""
     import cv2
-
-    from ..feedback.rule_based import moment_lines, moment_title
 
     if not report.moments:
         return []
@@ -96,7 +95,7 @@ def render_moments(report: Report, ref_video: str, user_video: str, ref_seq: Pos
     user_c = clean(user_seq, c["conf_threshold"], c["smooth_sigma_s"])
     mirrored = report.meta.get("mirror_ref", False)
     ref_vfps, user_vfps = probe(ref_video).fps, probe(user_video).fps
-    font, font_big = _font(max(18, height // 24)), _font(max(22, height // 18))
+    font = _font(max(16, height // 22))
     paths = []
     for m in report.moments:
         t, tu = m["t"], m["user_t"]
@@ -110,15 +109,7 @@ def render_moments(report: Report, ref_video: str, user_video: str, ref_seq: Pos
         pr = _panel(fr, kr, REF_COLOR, ref_marks, height, "お手本", font)
         pu = _panel(fu, ku, USER_COLOR, marks, height, "あなた", font)
         gap = np.full((height, 12, 3), 20, np.uint8)
-        top = np.concatenate([pr, gap, pu], axis=1)
-        lines = [(moment_title(m), font_big, (255, 255, 255))]
-        lines += [("・" + line, font, (140, 190, 255)) for line in moment_lines(m)]
-        bar_h = 24 + len(lines) * (font.size + 14 if font else 30) + 20
-        bar = np.full((bar_h * 2, top.shape[1], 3), 20, np.uint8)  # 折り返しに備えて広めに取り、後で切り詰める
-        bar = _text(bar, lines, (16, 14), max_width=top.shape[1] - 32)
-        used = np.where(bar.max(axis=(1, 2)) > 20)[0]
-        bar = bar[: (used[-1] + 16 if used.size else bar_h)]
-        img = np.concatenate([top, bar], axis=0)
+        img = np.concatenate([pr, gap, pu], axis=1)  # 説明文は画面・report.md で画像の横に出す
         name = f"moment_{m['rank']}.jpg"
         cv2.imwrite(os.path.join(out_dir, name), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
         m["image"] = name
