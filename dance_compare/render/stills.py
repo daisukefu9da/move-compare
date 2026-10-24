@@ -104,7 +104,8 @@ def render_moments(report: Report, ref_video: str, user_video: str, ref_seq: Pos
     font = _font(max(16, height // 22))
     paths = []
     for m in report.moments:
-        t, tu = m["t"], m["user_t"]
+        t = m["t"]
+        tu = float(report.display_user_time(t))
         fr = read_frame(ref_video, int(round(t * ref_vfps)))
         fu = read_frame(user_video, int(round(tu * user_vfps)))
         kr = ref_c.keypoints[min(int(round(t * ref_c.fps)), len(ref_c) - 1)]
@@ -150,7 +151,7 @@ def render_moment_clips(report: Report, ref_video: str, user_video: str, ref_seq
         times = np.arange(max(t_lo, m["t"] - half), min(t_hi, m["t"] + half), 1.0 / fps)
         if times.size < 2:
             continue
-        utimes = np.asarray(report.user_time(times))
+        utimes = np.asarray(report.display_user_time(times))
         ri = np.clip(np.round(times * ref_c.fps).astype(int), 0, len(ref_c) - 1)
         ui = np.clip(np.round(utimes * user_c.fps).astype(int), 0, len(user_c) - 1)
         kr_all, ku_all = ref_c.keypoints[ri] * ref_k, user_c.keypoints[ui] * user_k

@@ -52,7 +52,26 @@ def align(ref: Features, user: Features, cfg: AnalysisConfig) -> np.ndarray:
     warp = gaussian_smooth(warp, cfg.warp_smooth_s * ref.fps)
     warp = np.clip(monotonic(warp), 0, user.n - 1)
     warp = refine_warp(ref.dtw_vectors(), user.dtw_vectors(), warp, ref.fps, cfg)
-    return np.clip(monotonic(warp), 0, user.n - 1)
+    warp = limit_rate(monotonic(warp), cfg.warp_min_rate, cfg.warp_max_rate)
+    return np.clip(warp, 0, user.n - 1)
+
+
+def limit_rate(warp: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """対応づけの傾き（レビュー対象が手本の何倍の速さで進むか）を [lo, hi] に収める.
+
+    人の動きは急に止まったり倍速になったりしないので、それを超える対応づけは時間合わせの失敗とみなす
+    （例: 骨格推定が乱れたフロアの動きで、0.4 秒間レビュー対象の時刻が止まり、遅れが 0.55 秒 → 0 秒に急に戻る）。
+    前向きに制限した後、後ろ向きにも制限して、元の対応にできるだけ沿った形にする。
+    """
+    if warp.size < 2:
+        return warp
+    f = warp.astype(np.float64).copy()
+    for i in range(1, f.size):
+        f[i] = np.clip(warp[i], f[i - 1] + lo, f[i - 1] + hi)
+    g = f.copy()
+    for i in range(f.size - 2, -1, -1):
+        g[i] = np.clip(f[i], g[i + 1] - hi, g[i + 1] - lo)
+    return g
 
 
 def refine_warp(a: np.ndarray, b: np.ndarray, warp: np.ndarray, fps: float, cfg: AnalysisConfig,

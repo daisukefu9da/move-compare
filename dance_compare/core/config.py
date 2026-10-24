@@ -24,6 +24,8 @@ class AnalysisConfig:
     dtw_step_penalty: float = 0.2      # 縦横ステップのペナルティ（コスト中央値に対する倍率）
     dtw_open_ends: bool = False        # レビュー対象の前後に余分な部分がある場合 True
     warp_smooth_s: float = 0.25        # 対応づけ結果の平滑化 [秒]
+    warp_min_rate: float = 0.5         # レビュー対象の進み方を手本の何倍以上に保つか（映像が止まる・時間が戻るのを防ぐ）
+    warp_max_rate: float = 2.0         # 何倍以下に抑えるか（映像が飛ぶのを防ぐ）
 
     # --- 区間（指摘の単位） ---
     window_counts: int = 2             # 何カウントごとに区切って評価するか（拍・カウントを使う場合）

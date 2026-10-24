@@ -222,3 +222,24 @@ def test_moments_pick_the_biggest_distinct_places():
     m = next(m for m in r.moments if m["items"][0]["kind"] == "angle")
     assert 4.4 <= m["t"] <= 5.6 and 8 in m["joints"]  # 右肘
     assert m["rank"] == 1 or r.moments[0]["score"] >= m["score"]
+
+
+def test_limit_rate_removes_freezes_and_jumps():
+    from dance_compare.core.analyzer import limit_rate
+
+    t = np.arange(100, dtype=float)
+    warp = t + 10.0
+    warp[40:52] = warp[40]           # 12 フレーム止まる
+    warp[52:] -= 0.0                 # その後は元に戻る（急に追いつく）
+    out = limit_rate(warp, 0.5, 2.0)
+    d = np.diff(out)
+    assert d.min() >= 0.5 - 1e-9 and d.max() <= 2.0 + 1e-9
+    assert np.abs(out - warp).max() < 6  # 元の対応から大きく外れない
+    assert np.allclose(limit_rate(t, 0.5, 2.0), t)  # 問題のない対応はそのまま
+
+
+def test_warp_rate_is_bounded_in_compare():
+    r = run(synth_dancer(delay_s=0.1, noise=1.0))
+    w = np.asarray(r.warp["user"])
+    rate = np.diff(w) / np.diff(np.asarray(r.warp["ref"]))
+    assert rate.min() >= 0.5 - 0.02 and rate.max() <= 2.0 + 0.02

@@ -69,6 +69,17 @@ class Report:
         """手本動画の時刻 -> 対応するレビュー対象動画の時刻."""
         return np.interp(ref_time, self.warp["ref"], self.warp["user"])
 
+    def display_user_time(self, ref_time: float | np.ndarray) -> np.ndarray:
+        """比較動画で手本の時刻に並べて見せる、レビュー対象動画の時刻.
+
+        二人が同じ音楽の時間で揃っている場合（1動画モード・音声で同期できた2動画モード）は、実際の時間のまま並べる
+        （遅れが見たまま分かり、時間合わせの揺れで映像が止まったり飛んだりしない）。揃っていない場合は、
+        時間合わせ（DTW）で同じ動きの瞬間に合わせて並べる。
+        """
+        if self.meta.get("synced"):
+            return np.asarray(ref_time) - self.meta["ref_t0"] + self.meta["user_t0"]
+        return self.user_time(ref_time)
+
     def count_grid(self):
         from .counts import CountGrid
         if len(self.beats) < 2:

@@ -118,7 +118,7 @@ def render_comparison(
     try:
         for k, t in enumerate(times):
             fi_r = min(int(round(t * fps)), len(ref_seq) - 1)
-            tu = float(report.user_time(t))
+            tu = float(report.display_user_time(t))
             fi_u = min(max(int(round(tu * user_seq.fps)), 0), len(user_seq) - 1)
             fr = rr.get(int(round(t * ref_vfps)))
             fu = ur.get(max(int(round(tu * user_vfps)), 0))
