@@ -233,7 +233,8 @@ class _Writer:
         h, w = frame.shape[:2]
         if shutil.which("ffmpeg") is None:
             self.cv = cv2.VideoWriter(self.path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h))
-            self.notes.append("ffmpeg が無いため、比較動画は音声なしで書き出しました")
+            if self.audio[0] is not None:
+                self.notes.append("ffmpeg が無いため、比較動画は音声なしで書き出しました")
             return
         enc = _ffmpeg_encoders()
         if "libx264" in enc:
@@ -275,6 +276,10 @@ class _Writer:
         if code != 0:
             raise RuntimeError("ffmpeg での動画の書き出しに失敗しました:\n" + _tail(self.log_path))
         src, start, dur = self.audio
+        if src is None:  # 音声なし（直すところの短い動画など）
+            os.replace(self.video_path, self.path)
+            os.remove(self.log_path)
+            return
         cmd = ["ffmpeg", "-y", "-v", "error", "-i", self.video_path, "-ss", f"{start}", "-t", f"{dur}", "-i", src,
                "-map", "0:v", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-shortest", self.path]
         r = subprocess.run(cmd, capture_output=True, text=True)

@@ -348,14 +348,20 @@ if "last" in st.session_state:
         st.subheader("比較動画")
         st.video(paths["video"])
 
-    # 直すところ（ズレの大きい瞬間の上位）: 左に静止画、右に修正点
+    # 直すところ（ズレの大きい瞬間の上位）: 左に前後の短い動画（スロー）、右に修正点
     st.subheader("直すところ")
     if not rep.moments:
         st.success("大きなズレは見つかりませんでした。")
+    else:
+        speed = rep.meta["config"].get("moment_clip_speed", 0.5)
+        st.caption(f"ズレの大きい瞬間の前後を {speed:g} 倍速のスローで繰り返し再生します。赤い丸がズレている部位です。")
     for m in rep.moments:
+        clip = os.path.join(out_dir, m.get("clip") or "")
         img = os.path.join(out_dir, m.get("image") or "")
         left, right = st.columns([3, 2], vertical_alignment="center")
-        if m.get("image") and os.path.exists(img):
+        if m.get("clip") and os.path.exists(clip):
+            left.video(clip, loop=True, autoplay=True, muted=True)
+        elif m.get("image") and os.path.exists(img):
             left.image(img, width="stretch")
         right.markdown(f"**{moment_title(m)}**\n\n" + "\n".join(f"- {line}" for line in moment_lines(m)))
 

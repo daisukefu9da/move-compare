@@ -280,17 +280,22 @@ def save_outputs(result: AnalysisResult, out_dir: str, narrator, render: bool = 
         "user_pose": os.path.join(out_dir, "user_pose.json"),
         "findings_csv": os.path.join(out_dir, "findings.csv"),
     }
-    # 「直すところ」の静止画（文章から参照するので先に作る）
-    from .render.stills import render_moments
+    # 「直すところ」の静止画と短い動画（文章から参照するので先に作る）
+    from .render.stills import render_moment_clips, render_moments
 
-    for old in os.listdir(out_dir):  # 前回の静止画が残らないように
-        if old.startswith("moment_") and old.endswith(".jpg"):
+    for old in os.listdir(out_dir):  # 前回の静止画・短い動画が残らないように
+        if old.startswith("moment_") and old.endswith((".jpg", ".mp4")):
             os.remove(os.path.join(out_dir, old))
     try:
         paths["moments"] = render_moments(result.report, result.ref_video, result.user_video,
                                           result.ref_seq, result.user_seq, out_dir)
     except Exception as e:  # 静止画が作れなくても解析結果は返す
         result.notes.append(f"静止画を作れませんでした: {e}")
+    try:
+        paths["moment_clips"] = render_moment_clips(result.report, result.ref_video, result.user_video,
+                                                    result.ref_seq, result.user_seq, out_dir)
+    except Exception as e:
+        result.notes.append(f"直すところの短い動画を作れませんでした: {e}")
     text = narrator if isinstance(narrator, str) else narrator.narrate(result.report)
     paths["text"] = text
     # 比較動画（失敗しても解析結果は保存し、理由を処理メモに残す）

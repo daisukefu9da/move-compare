@@ -79,6 +79,8 @@ class AnalysisConfig:
     weight_arms: float = 1.0           # 腕（肘・肩の角度、手先の振れ幅・キレ）
     weight_timing: float = 1.0         # 手本とのタイミング（全身）
     top_moments: int = 3               # 「直すところ」として見せる瞬間の数
+    moment_clip_s: float = 1.5         # 直すところの短い動画: ズレた瞬間の前後何秒を切り出すか
+    moment_clip_speed: float = 0.5     # 直すところの短い動画の再生速度（0.5 = 半分の速さのスロー）
 
     # --- スコア ---
     # 各項目のズレを「指摘のしきい値の何倍か」で表し、次の対応で点数にする（しきい値と連動）:
