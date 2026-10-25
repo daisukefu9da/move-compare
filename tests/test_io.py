@@ -186,3 +186,24 @@ def test_proxy_and_rescale(tmp_path, monkeypatch):
 
     # 小さい動画は作り直さない
     assert proxy.make_proxy(v, max_side=2000, max_fps=60).path == v
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
+def test_preview_keeps_timeline(tmp_path, monkeypatch):
+    import dance_compare.media.preview as preview
+    from dance_compare.media.video import probe
+    from dance_compare.synth import write_synth_video
+
+    monkeypatch.setattr(preview, "PREVIEW_DIR", str(tmp_path / "preview"))
+    s = synth_dancer(duration=3, fps=60, width=1280, height=720, size=200, center=(640, 300))
+    v = str(tmp_path / "v.mp4")
+    write_synth_video(s, v)
+    p = preview.make_preview(v, thumbs=6, thumb_height=40)
+    info = probe(p.video)
+    # 長辺 640px・30fps に縮小し、時刻は元の動画と同じ（長さが変わらない）
+    assert (info.width, info.height) == (640, 360) and abs(info.fps - 30) < 0.01 and p.fps == 30
+    assert abs(info.duration - p.duration) < 0.1 and abs(p.duration - 3) < 0.1
+    import cv2
+    strip = cv2.imread(p.strip)
+    assert strip.shape[0] == 40 and strip.shape[1] == 6 * 71
+    assert preview.make_preview(v, thumbs=6, thumb_height=40).video == p.video  # 作成済みなら再利用

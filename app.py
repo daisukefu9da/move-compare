@@ -21,6 +21,7 @@ from dance_compare.feedback.rule_based import moment_lines, moment_title, tenden
 from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
                                     extract_tracks, save_outputs, suggest_range)
+from dance_compare.ui.trimmer import range_picker, time_picker
 
 UPLOAD_DIR = ".cache/uploads"
 OUT_DIR = "out"
@@ -170,18 +171,6 @@ def id_spans(video: str, backend: str) -> dict[int, tuple[float, float]]:
     return out
 
 
-@st.cache_data(show_spinner=False)
-def frame_at(video: str, t: float):
-    """動画の t 秒のコマ（RGB）."""
-    import cv2
-
-    from dance_compare.media.video import probe, read_frame
-
-    info = probe(video)
-    img = read_frame(video, max(0, min(int(round(t * info.fps)), info.frames - 1)))
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-
 def _auto_fill(video, backend, ref_id, user_id, f, cfg, mirror):
     """「自動で推定」ボタン: 二人の動きがそろっている区間を推定して、開始・終了の欄に入れる."""
     try:
@@ -199,14 +188,14 @@ def _auto_fill(video, backend, ref_id, user_id, f, cfg, mirror):
 def range_inputs(video, backend, ref_id, user_id, f, cfg, mirror):
     """1動画モードの「比較する区間」の欄. (開始, 終了, 空欄を自動推定するか) を返す."""
     st.markdown("#### 比較する区間")
-    st.caption("踊り始める前・踊り終えた後を比較に入れないための指定です。空欄の側は、二人の動きがそろっている所から自動で推定します。")
-    c1, c2, c3 = st.columns([2, 2, 2])
-    start = c1.number_input("開始 [秒]（空欄 = 自動）", min_value=0.0, value=None, step=0.1, key="range_start")
-    end = c2.number_input("終了 [秒]（空欄 = 自動）", min_value=0.0, value=None, step=0.1, key="range_end")
-    c3.write("")
-    c3.button("自動で推定して欄に入れる", on_click=_auto_fill, args=(video, backend, ref_id, user_id, f, cfg, mirror),
-              help="推定結果は欄に入るので、確認して必要なら書き換えてください")
-    auto_range = st.checkbox("空欄の側は自動で推定する（オフなら動画の最初・最後まで）", value=True)
+    st.caption("踊り始める前・踊り終えた後を比較に入れないための指定です。動画を見ながら黄色の端を動かすか、"
+               "再生して「ここを開始に」「ここを終了に」を押してください。動かしていない側（灰色）は、"
+               "二人の動きがそろっている所から自動で推定します。")
+    start, end = range_picker(video, "range")
+    c1, c2 = st.columns([2, 3])
+    c1.button("自動で推定して区間に入れる", on_click=_auto_fill, args=(video, backend, ref_id, user_id, f, cfg, mirror),
+              help="推定結果が区間に入るので、映像で確認して必要なら端を動かしてください")
+    auto_range = c2.checkbox("動かしていない側は自動で推定する（オフなら動画の最初・最後まで）", value=True)
 
     sc = st.session_state.get("sync_curve")
     if sc and sc[:3] == (video, ref_id, user_id):
@@ -215,19 +204,13 @@ def range_inputs(video, backend, ref_id, user_id, f, cfg, mirror):
             st.error(f"推定できませんでした: {err}")
         else:
             if curve.start is None:
-                st.warning("二人の動きがそろっている区間が見つかりませんでした。開始・終了を手動で入れてください。")
+                st.warning("二人の動きがそろっている区間が見つかりませんでした。区間の端を手で動かしてください。")
             else:
                 st.info(f"推定: {curve.start:.1f}秒 〜 {curve.end:.1f}秒")
             df = pd.DataFrame({"同期度": curve.score, "しきい値": cfg.sync_threshold},
                               index=np.round(curve.times, 2))
             st.line_chart(df, height=160)
             st.caption("同期度: 二人の動きがどれだけそろっているか（1 = 同じ動き）。しきい値を超えた状態が続く区間を振付とみなします。")
-    if start is not None or end is not None:
-        cols = st.columns(2)
-        if start is not None:
-            cols[0].image(frame_at(video, start), caption=f"開始 {start:.1f}秒", width="stretch")
-        if end is not None:
-            cols[1].image(frame_at(video, end), caption=f"終了 {end:.1f}秒", width="stretch")
     return start, end, auto_range
 
 
@@ -238,18 +221,23 @@ result = None
 if mode == "2動画モード":
     ref_video = video_input("お手本の動画", "ref")
     user_video = video_input("レビュー対象の動画", "user")
-    with st.expander("区間の指定（任意）"):
-        c = st.columns(4)
-        r0 = c[0].number_input("手本 開始 [秒]", 0.0, value=0.0)
-        r1 = c[1].number_input("手本 終了 [秒]（0 = 最後まで）", 0.0, value=0.0)
-        u0 = c[2].number_input("対象 開始 [秒]", 0.0, value=0.0)
-        u1 = c[3].number_input("対象 終了 [秒]（0 = 最後まで）", 0.0, value=0.0)
+    r0 = r1 = u0 = u1 = None
+    if ref_video and user_video:
+        if st.checkbox("比較する区間を指定する（任意）",
+                       help="比較に使う部分だけを、動画を見ながら選べます。動かしていない端は動画の最初・最後のままです。"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**お手本**")
+                r0, r1 = range_picker(ref_video, "ref_range", ("最初から", "最後まで"))
+            with c2:
+                st.markdown("**レビュー対象**")
+                u0, u1 = range_picker(user_video, "user_range", ("最初から", "最後まで"))
     if st.button("解析する", type="primary", disabled=not (ref_video and user_video)):
         prog = Progress()
         with st.spinner("解析中…（初回は骨格推定に時間がかかります）"):
             result = analyze_two_videos(
                 ref_video, user_video, cfg, backend=backend, mirror=mirror,
-                ref_range=(r0 or None, r1 or None), user_range=(u0 or None, u1 or None),
+                ref_range=(r0 or None, r1), user_range=(u0 or None, u1),
                 audio_sync=audio_sync, rhythm=rhythm, progress=prog)
 else:
     video = video_input("動画（二人以上が映っているもの）", "single")
@@ -260,11 +248,9 @@ else:
                 extract_tracks(video, backend, progress=lambda i, n: prog("骨格推定", i, n))
             st.session_state["detected"] = video
         if st.session_state.get("detected") == video:
-            from dance_compare.media.video import probe
-
-            info = probe(video)
-            pick_t = st.slider("人物を選ぶ時刻 [秒]（比較したい二人がはっきり映っている時刻にしてください）",
-                               0.0, max(info.duration, 0.1), 0.0, 0.5)
+            st.markdown("#### 人物を選ぶ時刻")
+            st.caption("比較したい二人がはっきり映っている所で止めてください。その時刻の人物が下に表示されます。")
+            pick_t = time_picker(video, "pick_t")
             frame = int(round(pick_t * extract_tracks(video, backend).fps))
             img, boxes, f = people_image(video, backend, frame)
             ids = sorted(boxes)

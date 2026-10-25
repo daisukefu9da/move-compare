@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --fg: #31333f; --sub: #808495; --bg: #fff; --line: #d6d6d9; --accent: #f5b301; --btn: #f0f2f6; }
+  html, body { margin: 0; padding: 0; background: transparent; color: var(--fg);
+    font-family: "Source Sans Pro", -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; font-size: 14px; }
+  #wrap { padding: 2px 2px 6px; user-select: none; -webkit-user-select: none; }
+  #stage { position: relative; background: #000; border-radius: 6px; display: flex; justify-content: center; }
+  video { display: block; max-width: 100%; max-height: 360px; cursor: pointer; }
+  #now { position: absolute; left: 8px; top: 6px; color: #fff; background: rgba(0,0,0,.55);
+    padding: 1px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+  #tl { position: relative; height: 56px; margin: 10px 16px 4px; border-radius: 6px; touch-action: none; cursor: pointer;
+    background-color: #222; background-size: 100% 100%; background-repeat: no-repeat; }
+  .dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.6); pointer-events: none; }
+  #sel { position: absolute; top: -3px; bottom: -3px; border: 3px solid var(--accent); border-left-width: 0; border-right-width: 0;
+    pointer-events: none; box-sizing: border-box; }
+  .handle { position: absolute; top: -3px; bottom: -3px; width: 14px; background: var(--accent); pointer-events: none;
+    display: flex; align-items: center; justify-content: center; color: #000; font-weight: bold; font-size: 11px; }
+  #hs { border-radius: 6px 0 0 6px; transform: translateX(-14px); }
+  #he { border-radius: 0 6px 6px 0; }
+  .handle.auto { background: #9aa0aa; }
+  #head { position: absolute; top: -6px; bottom: -6px; width: 3px; margin-left: -1.5px; background: #fff;
+    box-shadow: 0 0 2px #000; border-radius: 2px; pointer-events: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--btn); color: var(--fg); border-radius: 6px;
+    padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  button.main { background: #ff4b4b; border-color: #ff4b4b; color: #fff; }
+  button.main:hover { color: #fff; filter: brightness(1.08); }
+  .times { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .times b { font-weight: 600; }
+  .clear { padding: 0 6px; font-size: 12px; margin-left: 4px; }
+  .sub { color: var(--sub); font-size: 12px; margin-top: 6px; }
+  .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+  .err { color: #c00; padding: 8px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><video id="v" playsinline preload="auto"></video><div id="now">0:00.00</div></div>
+  <div id="tl">
+    <div class="dim" id="dl"></div><div class="dim" id="dr"></div>
+    <div id="sel"></div>
+    <div class="handle" id="hs">‹</div><div class="handle" id="he">›</div>
+    <div id="head"></div>
+  </div>
+  <div class="row">
+    <button id="play" class="main" title="再生／一時停止（スペース）">▶ 再生</button>
+    <button data-step="-1" title="1 秒戻る（Shift + ←）">−1秒</button>
+    <button data-frame="-1" title="1 コマ戻る（←）">◀ 1コマ</button>
+    <button data-frame="1" title="1 コマ進む（→）">1コマ ▶</button>
+    <button data-step="1" title="1 秒進む（Shift + →）">+1秒</button>
+    <span class="sep range-only"></span>
+    <button id="setS" class="range-only" title="今の位置を開始にする（I）">ここを開始に</button>
+    <button id="setE" class="range-only" title="今の位置を終了にする（O）">ここを終了に</button>
+    <button id="playSel" class="range-only" title="選んだ区間を再生">区間を再生</button>
+    <button id="usePt" class="point-only" title="今の位置に決める">この時刻にする</button>
+  </div>
+  <div class="times">
+    <span class="range-only">開始 <b id="ts"></b><button class="clear" id="cs" title="元に戻す">×</button></span>
+    <span class="range-only">終了 <b id="te"></b><button class="clear" id="ce" title="元に戻す">×</button></span>
+    <span class="range-only">長さ <b id="tlen"></b></span>
+    <span class="point-only">選んだ時刻 <b id="tp"></b></span>
+  </div>
+  <div class="sub" id="help"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  // Streamlit のカスタムコンポーネントの通信（streamlit-component-lib と同じ形式）
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
+  }
+  function setHeight() { send("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight }); }
+
+  const v = document.getElementById("v"), tl = document.getElementById("tl");
+  const $ = (id) => document.getElementById(id);
+  const S = { mode: "range", dur: 0, fps: 30, start: null, end: null, point: 0, empty: ["自動", "自動"],
+              src: null, lastArgs: null, sent: [], stopAt: null };
+
+  function fmt(t) {
+    if (t == null || !isFinite(t)) return "-";
+    const m = Math.floor(t / 60), s = t - m * 60;
+    return m + ":" + (s < 10 ? "0" : "") + s.toFixed(2);
+  }
+  const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+  const snap = (t) => Math.round(t * S.fps) / S.fps;  // コマ単位にそろえる
+  const sVal = () => (S.start == null ? 0 : S.start);
+  const eVal = () => (S.end == null ? S.dur : S.end);
+
+  function draw() {
+    const d = S.dur || 1, ps = sVal() / d * 100, pe = eVal() / d * 100, ph = (v.currentTime || 0) / d * 100;
+    if (S.mode === "range") {
+      $("dl").style.left = "0"; $("dl").style.width = ps + "%";
+      $("dr").style.left = pe + "%"; $("dr").style.right = "0";
+      $("sel").style.left = ps + "%"; $("sel").style.width = (pe - ps) + "%";
+      $("hs").style.left = ps + "%"; $("he").style.left = pe + "%";
+      $("hs").classList.toggle("auto", S.start == null); $("he").classList.toggle("auto", S.end == null);
+      $("ts").textContent = S.start == null ? S.empty[0] : fmt(S.start);
+      $("te").textContent = S.end == null ? S.empty[1] : fmt(S.end);
+      $("cs").style.display = S.start == null ? "none" : ""; $("ce").style.display = S.end == null ? "none" : "";
+      $("tlen").textContent = (S.start == null || S.end == null) ? "-" : fmt(eVal() - sVal());
+    } else {
+      $("tp").textContent = fmt(S.point);
+    }
+    $("head").style.left = ph + "%";
+    $("now").textContent = fmt(v.currentTime || 0);
+    $("play").textContent = v.paused ? "▶ 再生" : "❚❚ 停止";
+  }
+
+  // 値を Python 側へ返す（返した値は覚えておき、少し遅れて届く古い引数で表示が戻らないようにする）
+  function commit() {
+    const val = S.mode === "range" ? { start: S.start, end: S.end } : { t: S.point };
+    S.sent.push(JSON.stringify(val)); if (S.sent.length > 20) S.sent.shift();
+    send("streamlit:setComponentValue", { value: val, dataType: "json" });
+  }
+
+  function seek(t) { v.currentTime = clamp(t, 0, Math.max(0, S.dur - 1 / S.fps)); draw(); }
+  function setStart(t) {
+    S.start = clamp(snap(t), 0, eVal() - 1 / S.fps); if (S.start <= 0) S.start = 0;
+  }
+  function setEnd(t) { S.end = clamp(snap(t), sVal() + 1 / S.fps, S.dur); }
+
+  // タイムラインの操作: 区間の端の近くをつかむと端を動かす（その位置の映像を表示）、それ以外は再生位置の移動
+  let drag = null;
+  function timeAt(ev) { const r = tl.getBoundingClientRect(); return clamp((ev.clientX - r.left) / r.width, 0, 1) * S.dur; }
+  tl.addEventListener("pointerdown", (ev) => {
+    const r = tl.getBoundingClientRect(), x = ev.clientX - r.left, px = (t) => t / (S.dur || 1) * r.width;
+    drag = "head";
+    if (S.mode === "range") {
+      const ds = Math.abs(x - (px(sVal()) - 7)), de = Math.abs(x - (px(eVal()) + 7));
+      if (Math.min(ds, de) < 18) drag = ds <= de ? "start" : "end";
+    }
+    tl.setPointerCapture(ev.pointerId); v.pause(); move(ev);
+  });
+  function move(ev) {
+    if (!drag) return;
+    const t = timeAt(ev);
+    if (drag === "start") { setStart(t); seek(S.start); }
+    else if (drag === "end") { setEnd(t); seek(S.end); }
+    else { seek(t); if (S.mode === "point") S.point = snap(t); }
+    draw();
+  }
+  tl.addEventListener("pointermove", move);
+  function up() {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (d !== "head" || S.mode === "point") commit();
+  }
+  tl.addEventListener("pointerup", up); tl.addEventListener("pointercancel", up);
+
+  function togglePlay() {
+    if (v.paused) { S.stopAt = null; v.play(); } else v.pause();
+  }
+  function stepFrames(n) { v.pause(); seek(snap(v.currentTime + n / S.fps)); afterStep(); }
+  function stepSec(n) { v.pause(); seek(snap(v.currentTime + n)); afterStep(); }
+  let stepTimer = null;
+  function afterStep() {  // 時刻を選ぶ使い方ではコマ送りした位置を（連打が止まってから）返す
+    if (S.mode !== "point") return;
+    S.point = snap(v.currentTime); draw();
+    clearTimeout(stepTimer); stepTimer = setTimeout(commit, 400);
+  }
+  $("play").onclick = togglePlay;
+  v.onclick = togglePlay;
+  document.querySelectorAll("[data-frame]").forEach((b) => b.onclick = () => stepFrames(+b.dataset.frame));
+  document.querySelectorAll("[data-step]").forEach((b) => b.onclick = () => stepSec(+b.dataset.step));
+  $("setS").onclick = () => { setStart(v.currentTime); draw(); commit(); };
+  $("setE").onclick = () => { setEnd(v.currentTime); draw(); commit(); };
+  $("cs").onclick = () => { S.start = null; draw(); commit(); };
+  $("ce").onclick = () => { S.end = null; draw(); commit(); };
+  $("playSel").onclick = () => { seek(sVal()); S.stopAt = eVal(); v.play(); };
+  $("usePt").onclick = () => { v.pause(); S.point = snap(v.currentTime); draw(); commit(); };
+  v.addEventListener("pause", () => {
+    draw();
+    if (S.mode === "point" && Math.abs(snap(v.currentTime) - S.point) > 1e-6) { S.point = snap(v.currentTime); draw(); commit(); }
+  });
+  v.addEventListener("play", draw);
+  v.addEventListener("loadedmetadata", () => { seek(S.mode === "point" ? S.point : sVal()); setHeight(); });
+  v.addEventListener("timeupdate", () => {
+    if (S.stopAt != null && v.currentTime >= S.stopAt) { v.pause(); S.stopAt = null; seek(eVal()); }
+    draw();
+  });
+  (function loop() { if (!v.paused) draw(); requestAnimationFrame(loop); })();  // 再生中は再生位置をなめらかに動かす
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target.tagName === "INPUT") return;
+    const k = ev.key;
+    if (k === " ") { togglePlay(); }
+    else if (k === "ArrowLeft") { ev.shiftKey ? stepSec(-1) : stepFrames(-1); }
+    else if (k === "ArrowRight") { ev.shiftKey ? stepSec(1) : stepFrames(1); }
+    else if ((k === "i" || k === "I") && S.mode === "range") { $("setS").click(); }
+    else if ((k === "o" || k === "O") && S.mode === "range") { $("setE").click(); }
+    else return;
+    ev.preventDefault();
+  });
+
+  window.addEventListener("message", (ev) => {
+    const msg = ev.data;
+    if (!msg || msg.type !== "streamlit:render") return;
+    const a = msg.args || {};
+    if (msg.theme && msg.theme.base === "dark") {
+      const r = document.documentElement.style;
+      r.setProperty("--fg", msg.theme.textColor || "#fafafa"); r.setProperty("--btn", "#262730");
+      r.setProperty("--line", "#4a4c56"); r.setProperty("--sub", "#a0a4b0");
+    }
+    S.mode = a.mode || "range"; S.dur = +a.duration || 0; S.fps = +a.fps || 30;
+    S.empty = a.empty_labels || S.empty;
+    document.querySelectorAll(".range-only").forEach((e) => e.style.display = S.mode === "range" ? "" : "none");
+    document.querySelectorAll(".point-only").forEach((e) => e.style.display = S.mode === "point" ? "" : "none");
+    if (S.mode !== "range") { ["dl", "dr", "sel", "hs", "he"].forEach((id) => $(id).style.display = "none"); }
+    $("help").textContent = S.mode === "range"
+      ? "黄色の端をドラッグすると、その位置の映像を見ながら区間を調整できます（灰色の端はまだ動かしていない状態＝" + (S.empty[0] === S.empty[1] ? S.empty[0] : S.empty[0] + "・" + S.empty[1]) + "）。キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒, I=開始, O=終了"
+      : "タイムラインをドラッグ・コマ送りして時刻を選びます（止めた位置が選ばれます）。キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒";
+    if (a.strip) tl.style.backgroundImage = "url('" + a.strip + "')";
+    // Python から新しい値が来たとき（自動推定など）だけ反映する。自分が返した値の折り返しは無視する
+    const key = JSON.stringify(S.mode === "range" ? { start: a.start ?? null, end: a.end ?? null } : { t: a.point ?? 0 });
+    if (key !== S.lastArgs) {
+      if (S.lastArgs === null || !S.sent.includes(key)) {
+        if (S.mode === "range") { S.start = a.start ?? null; S.end = a.end ?? null; }
+        else S.point = +(a.point || 0);
+        if (v.readyState >= 1) seek(S.mode === "point" ? S.point : sVal());
+      }
+      S.lastArgs = key;
+    }
+    if (a.video && a.video !== S.src) {
+      S.src = a.video; v.src = a.video;
+    } else if (!a.video && !S.src) {
+      $("stage").innerHTML = '<div class="err">プレビュー動画を作れませんでした（ffmpeg が必要です）</div>';
+    }
+    draw(); setHeight();
+  });
+  window.addEventListener("resize", setHeight);
+  send("streamlit:componentReady", { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>
