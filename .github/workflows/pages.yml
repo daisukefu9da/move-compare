@@ -1,0 +1,48 @@
+# ブラウザ版（PoC）を GitHub Pages に公開する。web/ や dance_compare/ を変えて push すると自動で更新される。
+# 初回だけ: GitHub のリポジトリの Settings → Pages → Build and deployment の Source を「GitHub Actions」にする。
+name: ブラウザ版を公開
+
+on:
+  push:
+    branches: [claude/beautiful-knuth-hfbfqy]
+    paths: ["web/**", "dance_compare/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/cache@v4
+        with:
+          path: .cache/web
+          key: web-vendor-${{ hashFiles('web/build.py') }}
+      - run: python web/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

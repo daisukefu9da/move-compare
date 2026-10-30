@@ -59,11 +59,11 @@ def extract_tracks(video: str, backend: str = "yolo", use_cache: bool = True, pr
     return track_cached(get_backend(backend, **backend_kwargs), video, progress, use_cache)
 
 
-def _beats_for(video: str, start: float, rhythm: Rhythm, duration: float, notes: list[str]):
-    """(拍の時刻, BPM) を返す. 取れなければ (None, None)."""
+def _beats_for(video: str, start: float, rhythm: Rhythm, duration: float | None, notes: list[str]):
+    """(拍の時刻, BPM) を返す. 取れなければ (None, None). duration が None なら動画から調べる."""
     if rhythm.bpm:
         first = rhythm.first_one if rhythm.first_one is not None else start
-        g = CountGrid.from_bpm(rhythm.bpm, first, duration)
+        g = CountGrid.from_bpm(rhythm.bpm, first, duration if duration is not None else probe(video).duration)
         return g.beats, rhythm.bpm
     if not rhythm.detect:
         return None, None
@@ -106,8 +106,14 @@ def analyze_two_videos(
     progress=None,
     ref_tracks: TrackSet | None = None,
     user_tracks: TrackSet | None = None,
+    ref_audio: np.ndarray | None = None,
+    user_audio: np.ndarray | None = None,
 ) -> AnalysisResult:
-    """2動画モード: お手本の動画とレビュー対象の動画を比較する."""
+    """2動画モード: お手本の動画とレビュー対象の動画を比較する.
+
+    ref_tracks / user_tracks / ref_audio / user_audio: 骨格推定・音声の取り出しを別の所（ブラウザなど）で
+    済ませている場合に渡す（音声は audio.SR のモノラル）。渡せば動画ファイルは読まない。
+    """
     cfg = cfg or AnalysisConfig()
     rhythm = rhythm or Rhythm()
     notes: list[str] = []
@@ -126,7 +132,8 @@ def analyze_two_videos(
     synced = False
     offset = None
     if audio_sync:
-        ya, yb = audio_mod.extract_audio(ref_video), audio_mod.extract_audio(user_video)
+        ya = ref_audio if ref_audio is not None else audio_mod.extract_audio(ref_video)
+        yb = user_audio if user_audio is not None else audio_mod.extract_audio(user_video)
         if ya is not None and yb is not None:
             offset, conf, uniq = audio_mod.estimate_offset(ya, yb)
             if conf >= cfg.audio_sync_min_confidence and uniq >= cfg.audio_sync_min_uniqueness:
@@ -146,13 +153,13 @@ def analyze_two_videos(
         else:
             notes.append("音声が無いため、動きだけで時間を合わせます")
 
-    ref_beats, _ = _beats_for(ref_video, r0, rhythm, probe(ref_video).duration, notes)
+    ref_beats, _ = _beats_for(ref_video, r0, rhythm, None, notes)
     if synced and ref_beats is not None:
         user_beats = ref_beats + offset
     elif rhythm.bpm:
         user_beats = None  # 手動 BPM の場合、レビュー対象側の拍の位置は分からない
     else:
-        user_beats, _ = _beats_for(user_video, u0, Rhythm(detect=rhythm.detect), probe(user_video).duration, notes)
+        user_beats, _ = _beats_for(user_video, u0, Rhythm(detect=rhythm.detect), None, notes)
 
     report = compare(
         ref_seq.trim(r0, r1), user_seq.trim(u0, u1), cfg,
