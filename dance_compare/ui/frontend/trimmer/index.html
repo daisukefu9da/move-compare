@@ -11,7 +11,8 @@
   video { display: block; max-width: 100%; max-height: 360px; cursor: pointer; }
   #now { position: absolute; left: 8px; top: 6px; color: #fff; background: rgba(0,0,0,.55);
     padding: 1px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
-  #tl { position: relative; height: 56px; margin: 10px 16px 4px; border-radius: 6px; touch-action: none; cursor: pointer;
+  #tlwrap { padding: 10px 16px 4px; touch-action: none; cursor: pointer; }  /* 端（タイムラインの外側）もつかめるように */
+  #tl { position: relative; height: 56px; border-radius: 6px;
     background-color: #222; background-size: 100% 100%; background-repeat: no-repeat; }
   .dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.6); pointer-events: none; }
   #sel { position: absolute; top: -3px; bottom: -3px; border: 3px solid var(--accent); border-left-width: 0; border-right-width: 0;
@@ -35,17 +36,29 @@
   .sub { color: var(--sub); font-size: 12px; margin-top: 6px; }
   .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
   .err { color: #c00; padding: 8px; }
+  /* スマホ・タブレット（指で操作）: 端をつかみやすく、ボタンを押しやすく */
+  @media (pointer: coarse) {
+    #tlwrap { padding: 12px 28px 6px; }
+    #tl { height: 60px; }
+    .handle { width: 24px; font-size: 16px; }
+    #hs { transform: translateX(-24px); }
+    button { padding: 9px 12px; font-size: 15px; }
+    .clear { padding: 2px 10px; }
+    .sep { display: none; }
+    .kbd { display: none; }
+  }
+  @media (max-width: 520px) { video { max-height: 280px; } }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="stage"><video id="v" playsinline preload="auto"></video><div id="now">0:00.00</div></div>
-  <div id="tl">
+  <div id="stage"><video id="v" playsinline webkit-playsinline preload="auto"></video><div id="now">0:00.00</div></div>
+  <div id="tlwrap"><div id="tl">
     <div class="dim" id="dl"></div><div class="dim" id="dr"></div>
     <div id="sel"></div>
     <div class="handle" id="hs">‹</div><div class="handle" id="he">›</div>
     <div id="head"></div>
-  </div>
+  </div></div>
   <div class="row">
     <button id="play" class="main" title="再生／一時停止（スペース）">▶ 再生</button>
     <button data-step="-1" title="1 秒戻る（Shift + ←）">−1秒</button>
@@ -64,7 +77,7 @@
     <span class="range-only">長さ <b id="tlen"></b></span>
     <span class="point-only">選んだ時刻 <b id="tp"></b></span>
   </div>
-  <div class="sub" id="help"></div>
+  <div class="sub"><span id="help"></span><span class="kbd" id="kbd"></span></div>
 </div>
 <script>
 (function () {
@@ -126,14 +139,16 @@
   // タイムラインの操作: 区間の端の近くをつかむと端を動かす（その位置の映像を表示）、それ以外は再生位置の移動
   let drag = null;
   function timeAt(ev) { const r = tl.getBoundingClientRect(); return clamp((ev.clientX - r.left) / r.width, 0, 1) * S.dur; }
-  tl.addEventListener("pointerdown", (ev) => {
+  const tw = document.getElementById("tlwrap");
+  tw.addEventListener("pointerdown", (ev) => {
     const r = tl.getBoundingClientRect(), x = ev.clientX - r.left, px = (t) => t / (S.dur || 1) * r.width;
     drag = "head";
     if (S.mode === "range") {
-      const ds = Math.abs(x - (px(sVal()) - 7)), de = Math.abs(x - (px(eVal()) + 7));
-      if (Math.min(ds, de) < 18) drag = ds <= de ? "start" : "end";
+      const hw = $("hs").offsetWidth || 14;  // 端の幅（指で操作する画面では太い）
+      const ds = Math.abs(x - (px(sVal()) - hw / 2)), de = Math.abs(x - (px(eVal()) + hw / 2));
+      if (Math.min(ds, de) < hw + 6) drag = ds <= de ? "start" : "end";
     }
-    tl.setPointerCapture(ev.pointerId); v.pause(); move(ev);
+    tw.setPointerCapture(ev.pointerId); v.pause(); move(ev);
   });
   function move(ev) {
     if (!drag) return;
@@ -143,13 +158,13 @@
     else { seek(t); if (S.mode === "point") S.point = snap(t); }
     draw();
   }
-  tl.addEventListener("pointermove", move);
+  tw.addEventListener("pointermove", move);
   function up() {
     if (!drag) return;
     const d = drag; drag = null;
     if (d !== "head" || S.mode === "point") commit();
   }
-  tl.addEventListener("pointerup", up); tl.addEventListener("pointercancel", up);
+  tw.addEventListener("pointerup", up); tw.addEventListener("pointercancel", up);
 
   function togglePlay() {
     if (v.paused) { S.stopAt = null; v.play(); } else v.pause();
@@ -211,8 +226,10 @@
     document.querySelectorAll(".point-only").forEach((e) => e.style.display = S.mode === "point" ? "" : "none");
     if (S.mode !== "range") { ["dl", "dr", "sel", "hs", "he"].forEach((id) => $(id).style.display = "none"); }
     $("help").textContent = S.mode === "range"
-      ? "黄色の端をドラッグすると、その位置の映像を見ながら区間を調整できます（灰色の端はまだ動かしていない状態＝" + (S.empty[0] === S.empty[1] ? S.empty[0] : S.empty[0] + "・" + S.empty[1]) + "）。キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒, I=開始, O=終了"
-      : "タイムラインをドラッグ・コマ送りして時刻を選びます（止めた位置が選ばれます）。キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒";
+      ? "黄色の端をドラッグすると、その位置の映像を見ながら区間を調整できます（灰色の端はまだ動かしていない状態＝" + (S.empty[0] === S.empty[1] ? S.empty[0] : S.empty[0] + "・" + S.empty[1]) + "）。"
+      : "タイムラインをドラッグ・コマ送りして時刻を選びます（止めた位置が選ばれます）。";
+    $("kbd").textContent = S.mode === "range" ? " キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒, I=開始, O=終了"
+                                              : " キー操作: スペース=再生, ←→=1コマ, Shift+←→=1秒";
     if (a.strip) tl.style.backgroundImage = "url('" + a.strip + "')";
     // Python から新しい値が来たとき（自動推定など）だけ反映する。自分が返した値の折り返しは無視する
     const key = JSON.stringify(S.mode === "range" ? { start: a.start ?? null, end: a.end ?? null } : { t: a.point ?? 0 });

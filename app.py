@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 
 import numpy as np
@@ -21,31 +22,69 @@ from dance_compare.feedback.rule_based import moment_lines, moment_title, tenden
 from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
                                     extract_tracks, save_outputs, suggest_range)
+from dance_compare.ui.library import delete_model, list_models, save_model
 from dance_compare.ui.trimmer import range_picker, time_picker
 
 UPLOAD_DIR = ".cache/uploads"
 OUT_DIR = "out"
 
 st.set_page_config(page_title="ダンス比較", layout="wide")
-st.title("ダンス比較")
+
+
+def _password() -> str | None:
+    """アクセス用のパスワード（環境変数 DANCE_COMPARE_PASSWORD か .streamlit/secrets.toml の password）."""
+    pw = os.environ.get("DANCE_COMPARE_PASSWORD")
+    if pw:
+        return pw
+    try:
+        return st.secrets.get("password")
+    except Exception:  # secrets.toml が無い
+        return None
+
+
+def _check_password():
+    """パスワードが設定されていれば、入力されるまで先に進ませない（インターネットに公開するとき用）."""
+    pw = _password()
+    if not pw or st.session_state.get("authed"):
+        return
+    st.markdown("## ダンス比較")
+    entered = st.text_input("パスワード", type="password")
+    if entered:
+        if hmac.compare_digest(entered, pw):
+            st.session_state["authed"] = True
+            st.rerun()
+        st.error("パスワードが違います")
+    st.stop()
+
+
+_check_password()
+st.markdown("## ダンス比較")
+# モードはスマホでも見える本文に置く（サイドバーはスマホでは閉じている）
+mode = st.radio("比べ方", ["2動画モード", "1動画モード"], horizontal=True,
+                captions=["お手本と自分を別々に撮った動画", "二人が一緒に映っている 1 本の動画"])
+
+
+def _save_upload(up) -> str:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    buf = up.getbuffer()  # コピーせずに参照（大きい動画でメモリを二重に使わない）
+    head = hashlib.sha1(buf[: 1 << 20]).hexdigest()[:10]  # 先頭 1MB + サイズで同じ動画かを判定
+    p = os.path.join(UPLOAD_DIR, f"{head}_{len(buf)}_{up.name}")
+    if not os.path.exists(p):
+        with open(p + ".part", "wb") as f:
+            f.write(buf)
+        os.replace(p + ".part", p)
+    return p
 
 
 def video_input(label: str, key: str) -> str | None:
-    """アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
-    c1, c2 = st.columns([3, 2])
-    up = c1.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up")
-    path = c2.text_input("またはファイルのパス", key=f"{key}_path",
-                         help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
+    """撮影・アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
+    up = st.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up",
+                          help="スマホでは、ここから「ビデオを撮る」でその場で撮影できます")
+    with st.expander("PC のファイルをパスで指定する", expanded=bool(st.session_state.get(f"{key}_path"))):
+        path = st.text_input("ファイルのパス", key=f"{key}_path",
+                             help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
     if up is not None:
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        buf = up.getbuffer()  # コピーせずに参照（大きい動画でメモリを二重に使わない）
-        head = hashlib.sha1(buf[: 1 << 20]).hexdigest()[:10]  # 先頭 1MB + サイズで同じ動画かを判定
-        p = os.path.join(UPLOAD_DIR, f"{head}_{len(buf)}_{up.name}")
-        if not os.path.exists(p):
-            with open(p + ".part", "wb") as f:
-                f.write(buf)
-            os.replace(p + ".part", p)
-        return p
+        return _save_upload(up)
     if path:
         path = path.strip().strip('"').strip("'")  # ドラッグ＆ドロップや「パスをコピー」で付く引用符を除く
         if os.path.exists(path):
@@ -54,11 +93,45 @@ def video_input(label: str, key: str) -> str | None:
     return None
 
 
+def _save_model(video: str):
+    try:
+        path = save_model(video, st.session_state.get("model_name", ""))
+    except (OSError, ValueError) as e:
+        st.session_state["model_error"] = f"保存できませんでした: {e}"
+        return
+    st.session_state["model_choice"] = os.path.splitext(os.path.basename(path))[0]  # 保存した手本を選んだ状態にする
+
+
+def _delete_model(name: str):
+    delete_model(name)
+    st.session_state.pop("model_choice", None)
+
+
+def model_input() -> str | None:
+    """2動画モードのお手本: 保存した手本から選ぶか、新しく撮影・アップロードする（保存もできる）."""
+    models = list_models()
+    new = "新しく撮影・アップロードする"
+    if st.session_state.get("model_choice") not in [new, *models]:
+        st.session_state.pop("model_choice", None)
+    choice = st.selectbox("お手本", [new, *models], key="model_choice",
+                          help="レッスンで何度も使う手本は、保存しておくと毎回アップロードしなくて済みます（骨格推定も 1 回だけ）")
+    if choice != new:
+        st.button(f"「{choice}」を削除", key="model_delete", on_click=_delete_model, args=(choice,))
+        return models[choice]
+    video = video_input("お手本の動画", "ref")
+    if video:
+        c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+        name = c1.text_input("名前を付けて手本として保存（任意）", key="model_name", placeholder="例: 11月 特訓 振付A")
+        c2.button("保存", disabled=not name, key="model_save", on_click=_save_model, args=(video,))
+        if "model_error" in st.session_state:
+            st.error(st.session_state.pop("model_error"))
+    return video
+
+
 # ---------------------------------------------------------------------------
 # サイドバー: 設定
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    mode = st.radio("入力", ["2動画モード", "1動画モード"], help="1動画モードは 1 本の動画に映る二人を比較します")
     backend = st.selectbox("骨格推定", ["yolo", "mediapipe"] if mode == "2動画モード" else ["yolo"],
                            help="mediapipe は 1 人用。yolo は複数人の追跡ができます")
     mirror = st.checkbox("手本を左右反転して比較", help="手本が向かい合わせ（鏡写しでない）で撮影されている場合")
@@ -219,7 +292,7 @@ def range_inputs(video, backend, ref_id, user_id, f, cfg, mirror):
 # ---------------------------------------------------------------------------
 result = None
 if mode == "2動画モード":
-    ref_video = video_input("お手本の動画", "ref")
+    ref_video = model_input()
     user_video = video_input("レビュー対象の動画", "user")
     r0 = r1 = u0 = u1 = None
     if ref_video and user_video:
@@ -316,10 +389,10 @@ if "last" in st.session_state:
     # 部位別スコア（重み 0 の部位は「-」）
     sc = rep.scores
     keys = [k for k in GROUPS if k in sc]
-    cols = st.columns(len(keys) + 1)
-    cols[0].metric("総合", "-" if sc.get("overall") is None else f"{sc['overall']:.0f}")
-    for c, k in zip(cols[1:], keys):
-        c.metric(GROUPS[k], "-" if sc[k] is None else f"{sc[k]:.0f}")
+    items = [("総合", sc.get("overall"))] + [(GROUPS[k], sc[k]) for k in keys]
+    for i in range(0, len(items), 3):  # 3 つずつ並べる（スマホでも縦に長くなりすぎない）
+        for c, (name, v) in zip(st.columns(3), items[i:i + 3]):
+            c.metric(name, "-" if v is None else f"{v:.0f}")
 
     if "video" in paths and os.path.exists(paths["video"]):
         st.subheader("比較動画")

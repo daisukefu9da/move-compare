@@ -207,3 +207,21 @@ def test_preview_keeps_timeline(tmp_path, monkeypatch):
     strip = cv2.imread(p.strip)
     assert strip.shape[0] == 40 and strip.shape[1] == 6 * 71
     assert preview.make_preview(v, thumbs=6, thumb_height=40).video == p.video  # 作成済みなら再利用
+
+
+def test_model_library(tmp_path, monkeypatch):
+    import dance_compare.ui.library as lib
+
+    monkeypatch.setattr(lib, "MODEL_DIR", str(tmp_path / "models"))
+    v = tmp_path / "IMG_0001.MOV"
+    v.write_bytes(b"video")
+    assert lib.list_models() == {}
+    p = lib.save_model(str(v), " 11月/特訓 振付A ")
+    assert p.endswith("11月_特訓 振付A.mov") and open(p, "rb").read() == b"video"
+    assert list(lib.list_models()) == ["11月_特訓 振付A"]
+    lib.save_model(str(v), "11月/特訓 振付A")  # 同じ名前は上書き
+    assert len(lib.list_models()) == 1
+    lib.delete_model("11月_特訓 振付A")
+    assert lib.list_models() == {} and v.exists()  # 元の動画は消さない
+    with pytest.raises(ValueError):
+        lib.save_model(str(v), "  ")
