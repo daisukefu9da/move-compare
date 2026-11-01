@@ -216,9 +216,15 @@ class Progress:
             self.bar.progress(min(i / n, 1.0), text=f"{stage}: {i}/{n}")
 
 
+PICK_WIDTH = 900  # 人物を選ぶ画像の幅 [px]
+
+
 @st.cache_data(show_spinner=False)
 def people_image(video: str, backend: str, frame: int):
-    """人物 ID を描いた画像と {id: box}."""
+    """人物 ID を描いた画像（幅 PICK_WIDTH 以下に縮小）と {id: box}、フレーム番号、縮小率（画像の座標 × 縮小率 = 元の動画の座標）.
+
+    4K の動画をそのまま画面に送ると 1 枚で十数 MB になり、スマホでは表示が止まるので縮小する。
+    """
     import cv2
 
     from dance_compare.media.video import read_frame
@@ -227,11 +233,14 @@ def people_image(video: str, backend: str, frame: int):
     ts = extract_tracks(video, backend)
     f, boxes = people_at(ts, frame)
     img = read_frame(video, ts.video_frame(f))  # f は分析用に間引いたフレーム番号
+    k = min(1.0, PICK_WIDTH / img.shape[1])
+    if k < 1.0:
+        img = cv2.resize(img, (round(img.shape[1] * k), round(img.shape[0] * k)), interpolation=cv2.INTER_AREA)
     for tid, b in boxes.items():
-        x1, y1, x2, y2 = (int(v) for v in b)
+        x1, y1, x2, y2 = (int(v * k) for v in b)
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 255), 3)
-        cv2.putText(img, f"ID {tid}", (x1 + 4, y1 + 32), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 200, 255), 3)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), {int(k): v.tolist() for k, v in boxes.items()}, f
+        cv2.putText(img, f"ID {tid}", (x1 + 4, y1 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 255), 2)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), {int(k_): v.tolist() for k_, v in boxes.items()}, f, 1.0 / k
 
 
 @st.cache_data(show_spinner=False)
@@ -327,7 +336,7 @@ else:
             st.caption("比較したい二人がはっきり映っている所で止めてください。その時刻の人物が下に表示されます。")
             pick_t = time_picker(video, "pick_t")
             frame = int(round(pick_t * extract_tracks(video, backend).fps))
-            img, boxes, f = people_image(video, backend, frame)
+            img, boxes, f, to_orig = people_image(video, backend, frame)
             ids = sorted(boxes)
             spans = id_spans(video, backend)
 
@@ -337,14 +346,14 @@ else:
             clicked = None
             try:  # クリックで選べるコンポーネントがあれば使う（pip install streamlit-image-coordinates）
                 from streamlit_image_coordinates import streamlit_image_coordinates
-                w = min(900, img.shape[1])
-                st.caption("画像をクリックすると、その人物を下の欄で選びやすくなります")
-                pt = streamlit_image_coordinates(img, width=w, key="pick")
+                st.caption("画像をタップすると、その人物を下の欄で選びやすくなります")
+                pt = streamlit_image_coordinates(img, key="pick", image_format="JPEG", jpeg_quality=85,
+                                                 use_column_width="always")
                 if pt:
-                    s = img.shape[1] / w
+                    s = img.shape[1] / pt.get("width", img.shape[1]) * to_orig  # 表示上の座標 → 元の動画の座標
                     from dance_compare.pose.tracking import pick_by_point
                     clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
-                    st.info(f"クリックした人物: ID {clicked}")
+                    st.info(f"タップした人物: ID {clicked}")
             except ImportError:
                 st.image(img, caption=f"{fmt_time(f / extract_tracks(video, backend).fps)} の人物", width="stretch")
             if len(ids) < 2:
