@@ -20,11 +20,15 @@ jobs:
         run: |
           modal app list || true
           modal container list || true
-      - name: 最近のログ（6 時間分）
-        run: timeout 120 modal app logs dance-compare --since 6h --tail 400 --timestamps --show-container-id 2>&1 || true
+      - name: アプリのエラー出力（12 時間分）
+        run: timeout 120 modal app logs dance-compare --since 12h --tail 300 --source stderr --timestamps --show-container-id 2>&1 || true
+      - name: アプリの標準出力（12 時間分）
+        run: timeout 120 modal app logs dance-compare --since 12h --tail 150 --source stdout --timestamps --show-container-id 2>&1 || true
+      - name: Modal のシステムのログ（12 時間分）
+        run: timeout 120 modal app logs dance-compare --since 12h --tail 150 --source system --timestamps --show-container-id 2>&1 || true
       - name: サイトの応答時間（起動待ちを含む. 最大 5 分）
         run: |
-          for i in 1 2; do
+          for i in 1; do
             curl -s -o /dev/null -m 300 -w "HTTP %{http_code}  接続 %{time_connect}s  最初の応答 %{time_starttransfer}s  合計 %{time_total}s\n" "$URL" || echo "失敗（タイムアウトなど）"
           done
       - name: 応答時間を測った後のログ
