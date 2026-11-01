@@ -31,5 +31,16 @@ jobs:
           for i in 1; do
             curl -s -o /dev/null -m 300 -w "HTTP %{http_code}  接続 %{time_connect}s  最初の応答 %{time_starttransfer}s  合計 %{time_total}s\n" "$URL" || echo "失敗（タイムアウトなど）"
           done
+      - name: 骨格推定（GPU）を試す（起動 → 短い動画）
+        run: |
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          ffmpeg -v error -f lavfi -i testsrc=size=640x360:rate=30 -t 2 -pix_fmt yuv420p /tmp/t.mp4
+          python - <<'PY'
+          import time, modal
+          f = modal.Function.from_name("dance-compare", "track_pose")
+          t = time.time(); f.remote(b"", ""); print(f"GPU の起動: {time.time() - t:.1f} 秒")
+          data = open("/tmp/t.mp4", "rb").read()
+          t = time.time(); out = f.remote(data, ".mp4"); print(f"2 秒の動画の骨格推定: {time.time() - t:.1f} 秒（結果 {len(out)} バイト）")
+          PY
       - name: 応答時間を測った後のログ
         run: timeout 120 modal app logs dance-compare --since 10m --tail 200 --timestamps --show-container-id 2>&1 || true
