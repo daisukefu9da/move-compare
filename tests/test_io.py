@@ -225,3 +225,27 @@ def test_model_library(tmp_path, monkeypatch):
     assert lib.list_models() == {} and v.exists()  # 元の動画は消さない
     with pytest.raises(ValueError):
         lib.save_model(str(v), "  ")
+
+
+def test_people_at_end_of_video_looks_backwards():
+    from dance_compare.pose.tracking import people_at
+
+    ts = _tracks_with_switches([])
+    n = ts.n_frames
+    for tid in ts.ids:
+        ts.boxes[tid][n - 10:] = np.nan  # 最後の 10 コマは誰も映っていない
+    f, boxes = people_at(ts, n + 5)      # 動画の長さを超えた時刻を選んだ場合も
+    assert f == n - 11 and set(boxes) == {1, 2}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
+def test_read_frame_past_the_end_falls_back(tmp_path):
+    from dance_compare.media.video import probe, read_frame
+    from dance_compare.synth import write_synth_video
+
+    v = str(tmp_path / "v.mp4")
+    write_synth_video(synth_dancer(duration=2), v)
+    n = probe(v).frames
+    assert read_frame(v, n + 3).shape[0] > 0  # 数コマ先を指定しても最後のコマが返る
+    with pytest.raises(ValueError):
+        read_frame(v, n + 100)

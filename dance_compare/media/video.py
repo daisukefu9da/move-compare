@@ -57,16 +57,23 @@ def iter_frames(path: str, start: int = 0) -> Iterator[tuple[int, np.ndarray]]:
         cap.release()
 
 
-def read_frame(path: str, index: int = 0) -> np.ndarray:
+def read_frame(path: str, index: int = 0, back: int = 30) -> np.ndarray:
+    """index 番目のコマ. 読めなければ最大 back コマ手前まで戻って探す.
+
+    iPhone の動画などは、OpenCV が数えるコマ数が実際より多いことがあり、末尾付近のコマが読めない。
+    """
     import cv2
 
     cap = cv2.VideoCapture(path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-    ok, frame = cap.read()
-    cap.release()
-    if not ok:
-        raise ValueError(f"フレーム {index} を読めません: {path}")
-    return frame
+    try:
+        for i in range(max(0, index), max(-1, index - back - 1), -1):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ok, frame = cap.read()
+            if ok:
+                return frame
+    finally:
+        cap.release()
+    raise ValueError(f"フレーム {index} を読めません: {path}")
 
 
 class SequentialReader:

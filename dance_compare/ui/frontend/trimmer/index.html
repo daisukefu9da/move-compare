@@ -141,6 +141,7 @@
   function timeAt(ev) { const r = tl.getBoundingClientRect(); return clamp((ev.clientX - r.left) / r.width, 0, 1) * S.dur; }
   const tw = document.getElementById("tlwrap");
   tw.addEventListener("pointerdown", (ev) => {
+    prime();  // 自動の再生が許されなかった端末では、最初に触った時に表示させる
     const r = tl.getBoundingClientRect(), x = ev.clientX - r.left, px = (t) => t / (S.dur || 1) * r.width;
     drag = "head";
     if (S.mode === "range") {
@@ -166,8 +167,22 @@
   }
   tw.addEventListener("pointerup", up); tw.addEventListener("pointercancel", up);
 
+  // iPhone は一度も再生していない動画のコマを描かないので、読み込んだら音なしで一瞬だけ再生して止める
+  let primed = false, priming = false;
+  function prime() {
+    if (primed || priming) return;
+    priming = true;
+    v.muted = true;
+    const done = (ok) => {
+      if (ok) v.pause();
+      v.muted = false; priming = false; primed = ok;
+      seek(S.mode === "point" ? S.point : sVal());
+    };
+    const p = v.play();
+    if (p && p.then) p.then(() => done(true)).catch(() => done(false)); else done(true);
+  }
   function togglePlay() {
-    if (v.paused) { S.stopAt = null; v.play(); } else v.pause();
+    if (v.paused) { S.stopAt = null; v.muted = false; v.play(); } else v.pause();
   }
   function stepFrames(n) { v.pause(); seek(snap(v.currentTime + n / S.fps)); afterStep(); }
   function stepSec(n) { v.pause(); seek(snap(v.currentTime + n)); afterStep(); }
@@ -188,11 +203,12 @@
   $("playSel").onclick = () => { seek(sVal()); S.stopAt = eVal(); v.play(); };
   $("usePt").onclick = () => { v.pause(); S.point = snap(v.currentTime); draw(); commit(); };
   v.addEventListener("pause", () => {
+    if (priming) return;
     draw();
     if (S.mode === "point" && Math.abs(snap(v.currentTime) - S.point) > 1e-6) { S.point = snap(v.currentTime); draw(); commit(); }
   });
   v.addEventListener("play", draw);
-  v.addEventListener("loadedmetadata", () => { seek(S.mode === "point" ? S.point : sVal()); setHeight(); });
+  v.addEventListener("loadedmetadata", () => { seek(S.mode === "point" ? S.point : sVal()); setHeight(); prime(); });
   v.addEventListener("timeupdate", () => {
     if (S.stopAt != null && v.currentTime >= S.stopAt) { v.pause(); S.stopAt = null; seek(eVal()); }
     draw();
@@ -242,7 +258,7 @@
       S.lastArgs = key;
     }
     if (a.video && a.video !== S.src) {
-      S.src = a.video; v.src = a.video;
+      S.src = a.video; v.src = a.video + "#t=0.001";  // #t: iPhone で最初のコマを表示させる
     } else if (!a.video && !S.src) {
       $("stage").innerHTML = '<div class="err">プレビュー動画を作れませんでした（ffmpeg が必要です）</div>';
     }

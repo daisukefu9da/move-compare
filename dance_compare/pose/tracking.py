@@ -9,8 +9,14 @@ from .base import TrackSet
 
 
 def people_at(ts: TrackSet, frame: int, search: int = 30) -> tuple[int, dict[int, np.ndarray]]:
-    """frame 付近で人が映っている最初のフレームと、その時の {id: box} を返す（選択 UI 用）."""
-    for f in range(frame, min(ts.n_frames, frame + search)):
+    """frame 付近で人が映っているフレームと、その時の {id: box} を返す（選択 UI 用）.
+
+    まず frame から後ろを、見つからなければ前を探す（動画の末尾を選んだ場合など）。
+    """
+    frame = int(min(max(frame, 0), ts.n_frames - 1))
+    after = range(frame, min(ts.n_frames, frame + search))
+    before = range(frame - 1, max(-1, frame - search - 1), -1)
+    for f in [*after, *before]:
         boxes = {tid: ts.boxes[tid][f] for tid in ts.ids if np.isfinite(ts.boxes[tid][f, 0])}
         if boxes:
             return f, boxes
