@@ -1,4 +1,4 @@
-# サーバー版（Modal）を再起動する（手動で実行）: 動いているコンテナを止める。次にサイトを開いたときに新しく起動する。
+# サーバー版（Modal）を再起動する（手動で実行）: アプリを止めて（動いているコンテナもすべて止まる）、公開し直す。
 # 画面が固まって応答しなくなったときに使う。
 name: サーバー版を再起動
 
@@ -13,25 +13,19 @@ jobs:
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       URL: https://daisukefu9da--dance-compare-ui.us-east.modal.run/
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -q modal
-      - name: コンテナを止める
+      - name: アプリを止める
         run: |
-          modal container list --json > containers.json || echo "[]" > containers.json
-          python - <<'PY'
-          import json, subprocess
-          rows = json.load(open("containers.json"))
-          for r in rows:
-              cid = r.get("Container ID") or r.get("container_id") or r.get("id")
-              app = r.get("App Name") or r.get("app_name") or ""
-              print("container", cid, app)
-              if cid and "dance-compare" in app:
-                  subprocess.run(["modal", "container", "stop", cid], check=False)
-          PY
-          sleep 10
           modal container list || true
+          modal app stop dance-compare --yes || modal app stop dance-compare || true
+          sleep 5
+          modal container list || true
+      - name: 公開し直す
+        run: modal deploy deploy/modal_app.py
       - name: サイトを開いて起動させる（応答時間）
         run: curl -s -o /dev/null -m 300 -w "HTTP %{http_code}  最初の応答 %{time_starttransfer}s\n" "$URL" || echo "失敗"
       - name: 起動のログ
