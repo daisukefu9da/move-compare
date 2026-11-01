@@ -80,9 +80,11 @@ def video_input(label: str, key: str) -> str | None:
     """撮影・アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
     up = st.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up",
                           help="スマホでは、ここから「ビデオを撮る」でその場で撮影できます")
-    with st.expander("PC のファイルをパスで指定する", expanded=bool(st.session_state.get(f"{key}_path"))):
-        path = st.text_input("ファイルのパス", key=f"{key}_path",
-                             help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
+    path = None
+    if not os.environ.get("DANCE_COMPARE_HIDE_PATH_INPUT"):  # サーバーで公開するときは、サーバーのファイルを読ませない
+        with st.expander("PC のファイルをパスで指定する", expanded=bool(st.session_state.get(f"{key}_path"))):
+            path = st.text_input("ファイルのパス", key=f"{key}_path",
+                                 help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
     if up is not None:
         return _save_upload(up)
     if path:

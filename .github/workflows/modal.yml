@@ -1,0 +1,47 @@
+# サーバー版（Streamlit + GPU）を Modal に公開する。アプリのコードを変えて push すると自動で更新される。
+# 必要な GitHub の Secrets（Settings → Secrets and variables → Actions）:
+#   MODAL_TOKEN_ID / MODAL_TOKEN_SECRET: Modal の API トークン
+#   APP_PASSWORD: アプリを開くときのパスワード（Modal の Secret「dance-compare」に登録される）
+name: サーバー版を Modal に公開
+
+on:
+  push:
+    branches: [claude/beautiful-knuth-hfbfqy]
+    paths: ["app.py", "dance_compare/**", "deploy/**", ".streamlit/**", ".github/workflows/modal.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: modal-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+    steps:
+      - name: 設定の確認
+        id: check
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ] || [ -z "$MODAL_TOKEN_SECRET" ]; then
+            echo "Modal のトークンが未設定なので公開しません"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$APP_PASSWORD" ]; then
+            echo "::error::APP_PASSWORD が未設定です（パスワードなしでは公開しません）"; exit 1
+          fi
+      - if: steps.check.outputs.skip != '1'
+        uses: actions/checkout@v4
+      - if: steps.check.outputs.skip != '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.check.outputs.skip != '1'
+        run: pip install modal
+      - name: パスワードを Modal に登録
+        if: steps.check.outputs.skip != '1'
+        run: modal secret create dance-compare DANCE_COMPARE_PASSWORD="$APP_PASSWORD" --force > /dev/null
+      - name: 公開
+        if: steps.check.outputs.skip != '1'
+        run: modal deploy deploy/modal_app.py

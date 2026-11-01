@@ -1,0 +1,9 @@
+# サーバー（Modal）で動かすときの依存. GPU 版の torch は ultralytics の依存として入る
+numpy>=1.26
+opencv-python-headless>=4.8
+pillow>=10
+ultralytics>=8.3
+lap>=0.5
+streamlit>=1.35
+pandas>=2
+streamlit-image-coordinates>=0.1.9
