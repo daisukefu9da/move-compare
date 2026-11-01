@@ -1,0 +1,38 @@
+# サーバー版（Modal）を再起動する（手動で実行）: 動いているコンテナを止める。次にサイトを開いたときに新しく起動する。
+# 画面が固まって応答しなくなったときに使う。
+name: サーバー版を再起動
+
+on:
+  workflow_dispatch:
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      URL: https://daisukefu9da--dance-compare-ui.us-east.modal.run/
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q modal
+      - name: コンテナを止める
+        run: |
+          modal container list --json > containers.json || echo "[]" > containers.json
+          python - <<'PY'
+          import json, subprocess
+          rows = json.load(open("containers.json"))
+          for r in rows:
+              cid = r.get("Container ID") or r.get("container_id") or r.get("id")
+              app = r.get("App Name") or r.get("app_name") or ""
+              print("container", cid, app)
+              if cid and "dance-compare" in app:
+                  subprocess.run(["modal", "container", "stop", cid], check=False)
+          PY
+          sleep 10
+          modal container list || true
+      - name: サイトを開いて起動させる（応答時間）
+        run: curl -s -o /dev/null -m 300 -w "HTTP %{http_code}  最初の応答 %{time_starttransfer}s\n" "$URL" || echo "失敗"
+      - name: 起動のログ
+        run: timeout 60 modal app logs dance-compare --since 10m --tail 80 --timestamps --show-container-id 2>&1 | grep -v "_stcore" || true
