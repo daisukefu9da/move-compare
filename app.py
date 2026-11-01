@@ -22,6 +22,8 @@ from dance_compare.feedback.rule_based import moment_lines, moment_title, tenden
 from dance_compare.feedback.table import findings_rows
 from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_two_videos,
                                     extract_tracks, save_outputs, suggest_range)
+from dance_compare.pose import remote
+from dance_compare.pose.remote import remote_target, warm
 from dance_compare.ui.library import delete_model, list_models, save_model
 from dance_compare.ui.trimmer import range_picker, time_picker
 
@@ -86,6 +88,9 @@ def video_input(label: str, key: str) -> str | None:
             path = st.text_input("ファイルのパス", key=f"{key}_path",
                                  help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
     if up is not None:
+        if remote_target() and not st.session_state.get("_gpu_warmed"):
+            warm()  # 骨格推定用の GPU を先に起こしておく（「人物を検出」「解析する」での待ちを減らす）
+            st.session_state["_gpu_warmed"] = True
         return _save_upload(up)
     if path:
         path = path.strip().strip('"').strip("'")  # ドラッグ＆ドロップや「パスをコピー」で付く引用符を除く
@@ -323,14 +328,19 @@ if mode == "2動画モード":
                 ref_video, user_video, cfg, backend=backend, mirror=mirror,
                 ref_range=(r0 or None, r1), user_range=(u0 or None, u1),
                 audio_sync=audio_sync, rhythm=rhythm, progress=prog)
+            if remote.LAST_NOTE:
+                result.notes.append(remote.LAST_NOTE)
 else:
     video = video_input("動画（二人以上が映っているもの）", "single")
     if video:
         if st.button("人物を検出"):
             prog = Progress()
-            with st.spinner("骨格推定中…"):
+            with st.spinner("骨格推定中…（サーバーの GPU の準備に少しかかることがあります）" if remote_target() else "骨格推定中…"):
                 extract_tracks(video, backend, progress=lambda i, n: prog("骨格推定", i, n))
             st.session_state["detected"] = video
+            st.session_state["pose_note"] = remote.LAST_NOTE
+        if st.session_state.get("pose_note") and st.session_state.get("detected") == video:
+            st.warning(st.session_state["pose_note"])
         if st.session_state.get("detected") == video:
             st.markdown("#### 人物を選ぶ時刻")
             st.caption("比較したい二人がはっきり映っている所で止めてください。その時刻の人物が下に表示されます。")

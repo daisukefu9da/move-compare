@@ -2,7 +2,9 @@
 
     modal deploy deploy/modal_app.py     （GitHub Actions の .github/workflows/modal.yml が push のたびに実行）
 
-- GPU（T4）付きのコンテナで今の app.py をそのまま動かす。使っていない間はコンテナが止まり、課金も止まる
+- 画面（今の app.py）は CPU のコンテナで動かし、骨格推定だけ GPU のコンテナ（track_pose）で行う。
+  GPU が混んでいても画面は開ける。GPU がなかなか空かなければ CPU で推定する（pose/remote.py）。
+  使っていない間はコンテナが止まり、課金も止まる
 - アクセス用のパスワードは Modal の Secret「dance-compare」の DANCE_COMPARE_PASSWORD
 - 保存した手本の動画だけを Volume（/data）に残す。アップロードした動画や解析結果はコンテナの一時領域に置き、
   コンテナが止まると消える（生徒の動画をサーバーに残さない）
@@ -37,11 +39,31 @@ data = modal.Volume.from_name("dance-compare-data", create_if_missing=True)
 
 
 @app.function(
-    gpu="T4",
+    gpu=["T4", "L4", "A10G"],  # 安い順に、空いている GPU を使う（T4 だけだと混んでいて起動できないことがあった）
+    timeout=15 * 60,
+    scaledown_window=2 * 60,   # 最後に使ってから 2 分で止める（GPU の課金を止める）
+    max_containers=2,
+)
+def track_pose(video: bytes, suffix: str) -> bytes:
+    """骨格推定だけを GPU で行う（画面のサーバーから呼ばれる）. 空のバイト列なら起動しておくだけ."""
+    import os
+    import sys
+
+    sys.path.insert(0, APP_DIR)
+    os.chdir(APP_DIR)  # yolo11n-pose.pt はここにある
+    from dance_compare.pose.remote import track_bytes
+
+    return track_bytes(video, suffix)
+
+
+@app.function(
+    cpu=2.0,
+    memory=4096,
     volumes={"/data": data},
     secrets=[modal.Secret.from_name("dance-compare")],
+    env={"DANCE_COMPARE_REMOTE_POSE": "dance-compare/track_pose"},  # 骨格推定は track_pose（GPU）に頼む
     timeout=60 * 60 * 4,       # 1 回の起動で使える最長時間
-    scaledown_window=5 * 60,   # 最後に使ってから 5 分で止める（GPU の課金を止める）
+    scaledown_window=10 * 60,  # 画面のサーバーは CPU なので安い。最後に使ってから 10 分で止める
     max_containers=1,          # 先生 1 人で使う前提。同時に何台も起動しない
 )
 @modal.concurrent(max_inputs=100)
@@ -51,6 +73,6 @@ def ui():
 
     subprocess.Popen(
         "streamlit run app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true "
-        "--server.enableCORS false --server.enableXsrfProtection false",
+        "--server.enableCORS false --server.enableXsrfProtection false --server.websocketPingInterval 20",
         shell=True, cwd=APP_DIR,
     )

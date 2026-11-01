@@ -249,3 +249,52 @@ def test_read_frame_past_the_end_falls_back(tmp_path):
     assert read_frame(v, n + 3).shape[0] > 0  # 数コマ先を指定しても最後のコマが返る
     with pytest.raises(ValueError):
         read_frame(v, n + 100)
+
+
+def test_remote_pose_backend_uses_gpu_result_or_falls_back(tmp_path, monkeypatch):
+    pytest.importorskip("modal")
+    import io
+
+    import dance_compare.pose.remote as remote
+
+    ts = _tracks_with_switches([])
+    buf = io.BytesIO()
+    ts.save(buf)
+    video = tmp_path / "proxy.mp4"
+    video.write_bytes(b"video")
+
+    class Call:
+        def __init__(self, ready):
+            self.ready, self.cancelled = ready, False
+
+        def get(self, timeout=None):
+            if not self.ready:
+                raise TimeoutError
+            return buf.getvalue()
+
+        def cancel(self):
+            self.cancelled = True
+
+    calls = []
+
+    class Fn:
+        def __init__(self, ready):
+            self.ready = ready
+
+        def spawn(self, data, suffix):
+            calls.append(Call(self.ready))
+            return calls[-1]
+
+    local = []
+    # GPU から結果が返る場合
+    monkeypatch.setattr(remote, "_function", lambda target: Fn(True))
+    b = remote.RemotePoseBackend("app/fn")
+    out = b.track(str(video))
+    assert out.ids == ts.ids and np.allclose(np.nan_to_num(out.keypoints[1]), np.nan_to_num(ts.keypoints[1]))
+    assert remote.LAST_NOTE is None
+    # GPU が空かない場合は CPU で推定する
+    monkeypatch.setattr(remote, "_function", lambda target: Fn(False))
+    b = remote.RemotePoseBackend("app/fn", max_wait_s=0)
+    monkeypatch.setattr(b.local, "track", lambda path, progress=None: local.append(path) or ts)
+    assert b.track(str(video)) is ts and local == [str(video)] and calls[-1].cancelled
+    assert "CPU で推定しました" in remote.LAST_NOTE

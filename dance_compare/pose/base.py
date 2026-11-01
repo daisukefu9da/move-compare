@@ -138,6 +138,9 @@ class PoseBackend(Protocol):
 
 def get_backend(name: str = "yolo", **kwargs) -> PoseBackend:
     if name == "yolo":
+        from .remote import RemotePoseBackend, remote_target
+        if remote_target():  # 骨格推定だけ GPU のサーバーで行う（Modal で公開する場合）
+            return RemotePoseBackend(remote_target(), **kwargs)
         from .yolo import YoloPoseBackend
         return YoloPoseBackend(**kwargs)
     if name == "mediapipe":
