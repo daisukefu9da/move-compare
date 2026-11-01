@@ -164,6 +164,13 @@
 - 速さ（参考にならない）: WASM・1 スレッドで 1 コマ約 0.5 秒。GPU が無い環境なので、iPhone の WebGPU で測る必要がある
 - 注意: 検証セットの合成動画（棒人間）は YOLO が人として検出しないので、骨格推定の確認には使えない（実写の動画が必要）
 
+### この環境での通しの確認（何度でも）
+- `bash web/e2e/run.sh`: ビルド → ローカルで配信 → Playwright（ヘッドレスの Chromium）で「動画を選ぶ → 骨格推定 → 二人をタップ → 解析」まで操作し、
+  結果・計測と画面の写真（`.cache/e2e/poc_flow.png`）を出す。失敗すると終了コード 1
+- テスト用の動画は `web/e2e/make_sample.py` が作る（実写の写真を動かした 12 秒の動画, VP9）
+- この環境でできないこと: iPhone の Safari・WebGPU での実行（速さの測定）、H.264 の動画の再生（Playwright の Chromium の制約）、
+  公開した GitHub Pages を開くこと（ネットワークの設定で daisukefu9da.github.io を許可すれば可能）
+
 ### iPhone で確かめること（お願い）
 1. GitHub の Settings → Pages → Source を「GitHub Actions」にする（初回だけ）。公開先: https://daisukefu9da.github.io/move-compare/
 2. iPhone の Safari で開き、「この端末」の WebGPU が「あり」になっているか
