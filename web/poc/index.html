@@ -25,6 +25,7 @@
   label { display: inline-flex; gap: 6px; align-items: center; }
   progress { width: 100%; height: 10px; }
   canvas, video { max-width: 100%; border-radius: 8px; background: #000; display: block; }
+  #stage video { width: 100%; height: 100%; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
   td { border-bottom: 1px solid var(--line); padding: 4px 6px; }
   td:first-child { color: var(--sub); width: 55%; }
@@ -58,11 +59,14 @@
       <label>コマ数 <select id="fps"><option value="30">30 / 秒</option><option value="15">15 / 秒</option></select></label>
       <label>推定 <select id="ep"><option value="webgpu">WebGPU（無ければ WASM）</option><option value="wasm">WASM のみ</option></select></label>
       <label>区間 <input id="maxSec" type="number" min="5" step="5" value="60" style="width:5em"> 秒まで</label>
+      <label>コマの取り出し <select id="grab"><option value="play">再生しながら（速い）</option><option value="seek">シーク（確実）</option></select></label>
     </div>
     <button id="run" disabled>骨格推定を始める</button>
     <div id="status" class="sub"></div>
     <progress id="prog" value="0" max="1" class="hidden"></progress>
-    <canvas id="preview" class="hidden"></canvas>
+    <div id="stage" class="hidden" style="position:relative;margin-top:8px">
+      <canvas id="preview" style="position:absolute;inset:0;width:100%;height:100%;background:transparent;pointer-events:none"></canvas>
+    </div>
   </section>
 
   <section id="pickSec" class="hidden">

@@ -54,6 +54,8 @@ export class PoseModel {
     const o = out.output0;
     const data = o.data ?? (await o.getData());
     const dets = decode(data, o.dims[2], r, px, py);
+    tensor.dispose?.();  // GPU のメモリを毎回はっきり返す（長い動画でメモリが足りなくならないように）
+    o.dispose?.();
     const t3 = performance.now();
     return { dets, ms: { pre: t1 - t0, infer: t2 - t1, post: t3 - t2 } };
   }

@@ -16,7 +16,13 @@ function renderPerf() {
   $("perf").innerHTML = Object.entries(perf).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
 }
 function status(msg) { $("status").textContent = msg; }
-function fail(e) { console.error(e); $("err").textContent = "エラー: " + (e && e.stack || e); }
+function fail(e) {
+  console.error(e);
+  // Safari の stack にはメッセージが入らないので、種類・メッセージ・場所を分けて出す
+  const msg = e ? `${e.name || ""}: ${e.message || e}` : "不明なエラー";
+  $("err").textContent = "エラー: " + msg + (e && e.stack ? "\n\n" + e.stack : "");
+  setPerf("エラー", msg);
+}
 window.addEventListener("error", (e) => fail(e.error || e.message));
 window.addEventListener("unhandledrejection", (e) => fail(e.reason));
 
@@ -71,11 +77,16 @@ async function openVideo(file) {
   const v = document.createElement("video");
   v.muted = true; v.playsInline = true; v.preload = "auto";
   v.setAttribute("playsinline", "");
-  // iPhone では画面に置いて一度再生しないとコマが描けないことがあるので、見えない大きさで置く
-  Object.assign(v.style, { position: "fixed", left: "0", top: "0", width: "2px", height: "2px", opacity: "0.01" });
-  document.body.appendChild(v);
+  // iPhone は画面に見えていない動画のコマを作らないことがあるので、推定中の動画をそのまま表示する（骨格は上に重ねる）
+  const stage = $("stage");
+  stage.querySelector("video")?.remove();
+  stage.prepend(v);
+  stage.classList.remove("hidden");
   v.src = URL.createObjectURL(file);
   await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("動画を開けません")); });
+  // 骨格を重ねる枠を動画と同じ縦横比にする（画面の高さの半分まで）
+  const ar = v.videoWidth / v.videoHeight;
+  Object.assign(stage.style, { aspectRatio: `${v.videoWidth} / ${v.videoHeight}`, maxWidth: `calc(50vh * ${ar})` });
   try { await v.play(); v.pause(); } catch (e) { /* 自動再生できなくてもシークで読める端末が多い */ }
   return v;
 }
@@ -88,43 +99,97 @@ function seek(v, t) {
   });
 }
 
+// コマの取り出し方 1: シーク（1 コマずつ位置を指定. 確実だが、iPhone の 4K 動画では毎回読み直しになり遅い）
+async function bySeek(v, fps, n, onFrame) {
+  for (let i = 0; i < n; i++) {
+    const s0 = performance.now();
+    await seek(v, i / fps + 0.001);
+    await onFrame(i, performance.now() - s0);
+  }
+}
+
+// コマの取り出し方 2: 再生しながら（動画は頭から順に読むだけなので速い）。推定が追いつかない分は再生を遅くし、
+// それでも間に合わず飛ばしたコマは、解析側（preprocess.interpolate_missing）で前後から補う
+function byPlay(v, fps, dur, onFrame) {
+  return new Promise((resolve, reject) => {
+    let done = false, last = -1, avg = 1000 / fps, count = 0;
+    const finish = () => { if (!done) { done = true; v.pause(); resolve(); } };
+    const cb = async (now, meta) => {
+      if (done) return;
+      const t = meta?.mediaTime ?? v.currentTime;
+      if (t >= dur) return finish();
+      const i = Math.round(t * fps);
+      if (i !== last) {
+        last = i;
+        const p0 = performance.now();
+        try { await onFrame(i, 0); } catch (e) { done = true; v.pause(); return reject(e); }
+        avg = 0.8 * avg + 0.2 * (performance.now() - p0);
+        // 推定 1 回の間に動画が 1 コマ分だけ進む速さで再生する
+        if (++count % 10 === 0) v.playbackRate = Math.min(2, Math.max(0.1, (1000 / fps) / avg * 0.9));
+      }
+      if (!done) v.requestVideoFrameCallback(cb);
+    };
+    v.onended = finish;
+    v.currentTime = 0;
+    v.playbackRate = 0.25;
+    v.requestVideoFrameCallback(cb);
+    v.play().catch(reject);
+  });
+}
+
 async function estimate(file, label) {
-  const m = await getModel();
+  let m = await getModel();
   const v = await openVideo(file);
   const fps = +$("fps").value;
   const w = v.videoWidth, h = v.videoHeight;
   const dur = Math.min(v.duration, +$("maxSec").value || v.duration);
   const n = Math.floor(dur * fps);
+  const mode = $("grab").value;
   const tr = new Tracker();
   const sum = { seek: 0, pre: 0, infer: 0, post: 0 };
   const pv = $("preview"), pctx = pv.getContext("2d");
-  pv.classList.remove("hidden");
   pv.width = 360; pv.height = Math.round(360 * h / w);
   $("prog").classList.remove("hidden");
   let lock = null;
   try { lock = await navigator.wakeLock?.request("screen"); } catch (e) { /* 画面を消さない機能が無い端末 */ }
   const t0 = performance.now();
-  for (let i = 0; i < n; i++) {
-    const s0 = performance.now();
-    await seek(v, i / fps + 0.001);
-    sum.seek += performance.now() - s0;
-    const { dets, ms } = await m.detect(v, w, h);
-    sum.pre += ms.pre; sum.infer += ms.infer; sum.post += ms.post;
-    tr.update(i, dets);
-    if (i % 10 === 0) {
-      pctx.drawImage(v, 0, 0, pv.width, pv.height);
-      drawPeople(pctx, dets.map((d) => ({ box: d.box, kp: d.kp })), pv.width / w);
-      $("prog").value = (i + 1) / n;
-      const el = (performance.now() - t0) / 1000;
-      status(`${label}: ${i + 1}/${n} コマ（${el.toFixed(0)} 秒, 1 コマ ${(el * 1000 / (i + 1)).toFixed(0)}ms）`);
-      await new Promise((r) => setTimeout(r, 0));
+  let done = 0, retried = false;
+  const onFrame = async (i, seekMs) => {
+    let r;
+    try {
+      r = await m.detect(v, w, h);
+    } catch (e) {
+      // GPU のメモリ不足などで失敗したら、推定の準備をやり直して 1 回だけ続ける
+      if (retried) throw e;
+      retried = true;
+      setPerf(`${label}: 途中のエラー（${i} コマ目, やり直しました）`, String(e && e.message || e));
+      model = null;
+      m = await getModel();
+      r = await m.detect(v, w, h);
     }
-  }
+    const { dets, ms } = r;
+    done++;
+    sum.seek += seekMs; sum.pre += ms.pre; sum.infer += ms.infer; sum.post += ms.post;
+    tr.update(i, dets);
+    if (done % 10 === 0) {
+      pctx.clearRect(0, 0, pv.width, pv.height);
+      drawPeople(pctx, dets.map((d) => ({ box: d.box, kp: d.kp })), pv.width / w);
+      $("prog").value = Math.min(1, (i + 1) / n);
+      const el = (performance.now() - t0) / 1000;
+      status(`${label}: ${Math.min(i + 1, n)}/${n} コマ目（${el.toFixed(0)} 秒）` +
+             ` 1 回あたり: シーク ${(sum.seek / done).toFixed(0)}ms・推定 ${(sum.infer / done).toFixed(0)}ms・前処理 ${(sum.pre / done).toFixed(0)}ms` +
+             (mode === "play" ? `・再生 ${v.playbackRate.toFixed(2)} 倍` : ""));
+      if (mode === "seek") await new Promise((res) => setTimeout(res, 0));
+    }
+  };
+  if (mode === "play") await byPlay(v, fps, dur, onFrame);
+  else await bySeek(v, fps, n, onFrame);
   const total = (performance.now() - t0) / 1000;
   lock?.release?.();
   setPerf(`${label}: 動画`, `${w}×${h}, ${v.duration.toFixed(1)} 秒（うち ${dur.toFixed(1)} 秒を ${fps}fps で ${n} コマ）`);
+  setPerf(`${label}: コマの取り出し`, mode === "play" ? `再生しながら（推定したコマ ${done}/${n}, 残りは補間）` : "シーク");
   setPerf(`${label}: 骨格推定の合計`, `${total.toFixed(1)} 秒（動画 1 分あたり ${(total / dur * 60).toFixed(0)} 秒）`);
-  setPerf(`${label}: 1 コマの内訳`, `シーク ${(sum.seek / n).toFixed(0)}ms / 前処理 ${(sum.pre / n).toFixed(0)}ms / 推定 ${(sum.infer / n).toFixed(0)}ms / 後処理 ${(sum.post / n).toFixed(1)}ms`);
+  setPerf(`${label}: 1 回の内訳`, `シーク ${(sum.seek / done).toFixed(0)}ms / 前処理 ${(sum.pre / done).toFixed(0)}ms / 推定 ${(sum.infer / done).toFixed(0)}ms / 後処理 ${(sum.post / done).toFixed(1)}ms`);
   setPerf(`${label}: 追跡した ID の数`, Object.keys(tr.people).length);
   return { v, tr, json: tracksJson(tr, fps, w, h, n) };
 }
