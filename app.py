@@ -356,11 +356,14 @@ if mode == "2動画モード":
             t0 = time.time()
             background.wait(ref_video, backend)
             background.wait(user_video, backend)
-            result = analyze_two_videos(
-                ref_video, user_video, cfg, backend=backend, mirror=mirror,
-                ref_range=(r0 or None, r1), user_range=(u0 or None, u1),
-                audio_sync=audio_sync, rhythm=rhythm, progress=prog)
-            if remote.LAST_NOTE:
+            try:
+                result = analyze_two_videos(
+                    ref_video, user_video, cfg, backend=backend, mirror=mirror,
+                    ref_range=(r0 or None, r1), user_range=(u0 or None, u1),
+                    audio_sync=audio_sync, rhythm=rhythm, progress=prog)
+            except ValueError as e:
+                st.error(str(e))
+            if result is not None and remote.LAST_NOTE:
                 result.notes.append(remote.LAST_NOTE)
             background.log_time("解析（骨格推定を待つ時間を含む）", time.time() - t0)
 else:
@@ -420,9 +423,13 @@ else:
                     prog = Progress()
                     with st.spinner("解析中…"):
                         t0 = time.time()
-                        result = analyze_single_video(video, Pick(ref_id), Pick(user_id), cfg,
-                                                      backend=backend, mirror=mirror, rhythm=rhythm, progress=prog,
-                                                      time_range=(start, end), auto_range=auto_range)
+                        try:
+                            result = analyze_single_video(video, Pick(ref_id), Pick(user_id), cfg,
+                                                          backend=backend, mirror=mirror, rhythm=rhythm,
+                                                          progress=prog, time_range=(start, end),
+                                                          auto_range=auto_range)
+                        except ValueError as e:  # 区間が短い・追跡が途切れた等は、画面に理由を出す
+                            st.error(str(e))
                         background.log_time("解析", time.time() - t0)
 
 if result is not None:

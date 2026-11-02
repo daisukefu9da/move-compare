@@ -27,6 +27,7 @@
   <div class="box">
     <label class="pick">🎥 動画を撮影・選択<input id="file" type="file" accept="video/*"></label>
     <div id="name"></div>
+    <video id="pv" muted playsinline webkit-playsinline style="display:none;width:120px;margin-top:8px;border-radius:6px"></video>
     <div class="bar" id="bar"><div id="fill"></div></div>
     <div id="status"></div>
   </div>
@@ -88,6 +89,90 @@ async function shrink(file, maxSide, fps, bitrate) {
   return new Blob([output.target.buffer], { type: "video/mp4" });
 }
 
+// iPhone などで WebCodecs が元の動画を読めない場合（「Decoder failure」等）: ブラウザで動画を再生しながら
+// コマを取り出して縮める。再生は 2 倍速（画面の更新 60 回/秒 → 動画 1 秒あたり 30 コマ）で、コマが取りこぼされる
+// ほど端末が遅ければ再生を遅くする。音声は変換せずにそのまま写す。
+async function shrinkViaVideo(file, maxSide, fps, bitrate) {
+  if (!("requestVideoFrameCallback" in HTMLVideoElement.prototype) || !("VideoFrame" in window)) {
+    note("再生しながら縮める機能なし"); return null;
+  }
+  const m = await import("./mediabunny.min.mjs");
+  const v = $("pv");
+  v.style.display = "block";
+  v.muted = true;
+  v.src = URL.createObjectURL(file);
+  await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("再生できない動画")); });
+  const dw = v.videoWidth, dh = v.videoHeight, dur = v.duration;
+  const k = Math.min(1, maxSide / Math.max(dw, dh));
+  const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+  const w = even(dw * k), h = even(dh * k);
+  const vcodec = await m.getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"], { width: w, height: h });
+  if (!vcodec) { note("書き出せる形式なし（再生方式）"); return null; }
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const output = new m.Output({ format: new m.Mp4OutputFormat({ fastStart: "in-memory" }), target: new m.BufferTarget() });
+  const vsrc = new m.VideoSampleSource({ codec: vcodec, bitrate });
+  output.addVideoTrack(vsrc, { frameRate: fps });
+  let at = null, asrc = null;
+  try {
+    const input = new m.Input({ formats: m.ALL_FORMATS, source: new m.BlobSource(file) });
+    at = await input.getPrimaryAudioTrack();
+    if (at && at.codec) { asrc = new m.EncodedAudioPacketSource(at.codec); output.addAudioTrack(asrc); }
+  } catch (e) { note("音声を読めない（再生方式）"); }
+  await output.start();
+  if (asrc) {
+    const cfg = await at.getDecoderConfig();
+    let first = true;
+    for await (const p of new m.EncodedPacketSink(at).packets()) {
+      await asrc.add(p, first ? { decoderConfig: cfg } : undefined);
+      first = false;
+    }
+  }
+  let rate = 2, last = -Infinity, frames = 0, winStart = 0, winFrames = 0, inflight = 0, held = false;
+  let queue = Promise.resolve();
+  await new Promise((resolve, reject) => {
+    v.onended = resolve;
+    v.onerror = () => reject(new Error("再生中のエラー"));
+    const cb = (now, meta) => {
+      const t = meta.mediaTime;
+      if (t - last >= 0.9 / fps) {
+        ctx.drawImage(v, 0, 0, w, h);
+        const sample = new m.VideoSample(new VideoFrame(canvas, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / fps) }));
+        inflight++;
+        queue = queue.then(() => vsrc.add(sample)).finally(() => {
+          sample.close();
+          inflight--;
+          if (held && inflight < 3) { held = false; v.play(); }  // 書き出しが追いついたら再生を続ける
+        });
+        last = t; frames++; winFrames++;
+        if (inflight > 8 && !v.paused) { held = true; v.pause(); }  // 書き出しが追いつかない間は待つ（メモリを使いすぎない）
+      }
+      if (t - winStart >= 1) {  // 動画 1 秒ごとに、取れたコマが少なければ再生を遅くする
+        if (winFrames < fps * 0.8 && rate > 1) { rate = Math.max(1, rate - 0.5); v.playbackRate = rate; }
+        else if (winFrames < fps * 0.6 && rate <= 1 && !held) {
+          // 等速でもコマが足りない（端末が遅い）: 分析の精度が落ちるので、やめて元の動画を送る
+          v.pause();
+          return reject(new Error(`コマの取り出しが遅い（動画 1 秒あたり ${winFrames} コマ）`));
+        }
+        winStart = t; winFrames = 0;
+      }
+      progress(t / dur);
+      status(`動画を軽くしています… ${Math.round((t / dur) * 100)}%`);
+      if (!v.ended) v.requestVideoFrameCallback(cb);
+    };
+    v.requestVideoFrameCallback(cb);
+    v.playbackRate = rate;
+    v.play().catch(reject);
+  });
+  await queue;
+  await output.finalize();
+  v.style.display = "none";
+  URL.revokeObjectURL(v.src);
+  note(`変換（再生しながら）: ${vcodec} ${w}x${h} ${frames}コマ ${rate}倍速`);
+  return new Blob([output.target.buffer], { type: "video/mp4" });
+}
+
 // 小分けにして、同時に何本か送る（通信の往復の待ち時間を重ねて速くする）
 async function upload(blob, name) {
   const id = crypto.randomUUID();
@@ -132,10 +217,18 @@ $("file").addEventListener("change", async () => {
     status("動画を軽くしています…");
     progress(0);
     try {
-      blob = await shrink(file, S.args.max_side, S.args.fps, S.args.bitrate);
+      blob = S.args.method === "video" ? null : await shrink(file, S.args.max_side, S.args.fps, S.args.bitrate);
     } catch (e) {
       note(`変換中のエラー: ${e && (e.name + ": " + e.message)}`);
       blob = null;
+    }
+    if (!blob) {  // 読めなかった場合は、再生しながら縮める方式で
+      try {
+        blob = await shrinkViaVideo(file, S.args.max_side, S.args.fps, S.args.bitrate);
+      } catch (e) {
+        note(`再生方式のエラー: ${e && (e.name + ": " + e.message)}`);
+        blob = null;
+      }
     }
     shrinkMs = performance.now() - t0;
     // 軽くできなかった・かえって大きくなった場合は元の動画を送る

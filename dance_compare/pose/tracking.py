@@ -168,16 +168,20 @@ def select_person(ts: TrackSet, track_id: int | None = None, point: tuple[float,
     return merge_tracks(ts, stitch(ts, resolve_id(ts, track_id, point, frame), exclude=set(exclude)))
 
 
-def select_pair(ts: TrackSet, ref: tuple, user: tuple) -> tuple[PoseSequence, PoseSequence]:
+# 追跡のつなぎ直しの基準を緩めたもの（標準の基準で区間が足りなかったときに使う）
+RELAXED_STITCH = dict(max_gap_s=6.0, max_overlap_s=2.0, max_dist=1.5, dist_per_s=0.8)
+
+
+def select_pair(ts: TrackSet, ref: tuple, user: tuple, **stitch_kw) -> tuple[PoseSequence, PoseSequence]:
     """1 本の動画から二人を選ぶ. ref / user は (track_id, point, frame).
 
-    お互いの ID を取り込まないよう、先に両方の ID を決めてから追跡をつなぐ。
+    お互いの ID を取り込まないよう、先に両方の ID を決めてから追跡をつなぐ。stitch_kw は stitch の基準。
     """
     rid, uid = resolve_id(ts, *ref), resolve_id(ts, *user)
     if rid == uid:
         raise ValueError("お手本とレビュー対象に同じ人物が選ばれています")
     # まず互いの最初の ID だけを除いて仮につなぎ、それを相手の位置として使って本番のつなぎ直しをする
-    u_tmp = stitch(ts, uid, exclude={rid}, rival=[rid])
-    r_chain = stitch(ts, rid, exclude=set(u_tmp), rival=u_tmp)
-    u_chain = stitch(ts, uid, exclude=set(r_chain), rival=r_chain)
+    u_tmp = stitch(ts, uid, exclude={rid}, rival=[rid], **stitch_kw)
+    r_chain = stitch(ts, rid, exclude=set(u_tmp), rival=u_tmp, **stitch_kw)
+    u_chain = stitch(ts, uid, exclude=set(r_chain), rival=r_chain, **stitch_kw)
     return merge_tracks(ts, r_chain), merge_tracks(ts, u_chain)

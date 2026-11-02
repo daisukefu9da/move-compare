@@ -298,3 +298,23 @@ def test_remote_pose_backend_uses_gpu_result_or_falls_back(tmp_path, monkeypatch
     monkeypatch.setattr(b.local, "track", lambda path, progress=None: local.append(path) or ts)
     assert b.track(str(video)) is ts and local == [str(video)] and calls[-1].cancelled
     assert "CPU で推定しました" in remote.LAST_NOTE
+
+
+def test_single_video_relaxes_stitching_when_range_is_after_a_break():
+    from dance_compare.pipeline import Pick, analyze_single_video
+
+    # お手本の ID が 5 秒で 1 → 3 に変わり、新しい ID が 1.5 秒前から重なって出ている（標準の基準ではつながらない）
+    ts = _tracks_with_switches([(0, 150, 3, 0, 45)])
+    res = analyze_single_video("unused.mp4", Pick(1), Pick(2), tracks=ts, time_range=(6.0, 11.0))
+    assert res.report.meta["ref_track_ids"] == [1, 3]
+    assert any("基準を緩めました" in n for n in res.notes)
+
+
+def test_single_video_explains_when_people_are_not_tracked_in_range():
+    from dance_compare.pipeline import Pick, analyze_single_video
+
+    ts = _tracks_with_switches([])
+    for arr in (ts.keypoints[2], ts.boxes[2]):
+        arr[90:] = np.nan  # レビュー対象が 3 秒以降見つからない
+    with pytest.raises(ValueError, match="人物を選び直してください"):
+        analyze_single_video("unused.mp4", Pick(1), Pick(2), tracks=ts, time_range=(6.0, 11.0))

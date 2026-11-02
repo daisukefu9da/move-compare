@@ -170,10 +170,17 @@ def analyze_two_videos(
     return AnalysisResult(report, ref_video, user_video, ref_seq, user_seq, notes)
 
 
-def _select_pair(tracks: TrackSet, ref_pick: Pick, user_pick: Pick) -> tuple[PoseSequence, PoseSequence, float, float]:
-    """1 本の動画から二人を選び、二人とも映っている区間 (開始, 終了) [秒] とともに返す."""
+def _select_pair(tracks: TrackSet, ref_pick: Pick, user_pick: Pick, relaxed: bool = False
+                 ) -> tuple[PoseSequence, PoseSequence, float, float]:
+    """1 本の動画から二人を選び、二人とも映っている区間 (開始, 終了) [秒] とともに返す.
+
+    relaxed: 追跡のつなぎ直しの基準を緩める（標準の基準では区間が足りないとき）.
+    """
+    from .pose.tracking import RELAXED_STITCH
+
     ref_seq, user_seq = select_pair(tracks, (ref_pick.track_id, ref_pick.point, ref_pick.frame),
-                                    (user_pick.track_id, user_pick.point, user_pick.frame))
+                                    (user_pick.track_id, user_pick.point, user_pick.frame),
+                                    **(RELAXED_STITCH if relaxed else {}))
     both = np.isfinite(ref_seq.keypoints[:, 5, 0]) & np.isfinite(user_seq.keypoints[:, 5, 0])
     present = np.where(both)[0]
     if present.size < ref_seq.fps * 2:
@@ -242,8 +249,12 @@ def analyze_single_video(
         raise ValueError("1動画モードは複数人を追跡できる yolo バックエンドを使ってください")
     tracks = tracks or extract_tracks(video, backend, use_cache, (lambda i, n: progress("骨格推定", i, n)) if progress else None)
     ref_seq, user_seq, s, e = _select_pair(tracks, ref_pick, user_pick)
-
     start, end = time_range
+    if (start is not None and start > e - 2.0) or (end is not None and end < s + 2.0):
+        # 選んだ二人の追跡が指定した区間まで続いていない: つなぎ直しの基準を緩めてもう一度
+        ref_seq, user_seq, s, e = _select_pair(tracks, ref_pick, user_pick, relaxed=True)
+        notes.append("人物の追跡が途切れていたため、つなぎ直しの基準を緩めました。比較動画で骨格が正しい人に乗っているか確認してください")
+
     sync = None
     if auto_range and (start is None or end is None):
         sync = suggest_range(tracks, ref_pick, user_pick, cfg, mirror)
@@ -258,6 +269,12 @@ def analyze_single_video(
     e = min(end if end is not None else e, e)
     notes += _tracking_notes(ref_seq, user_seq, want, (s, e))
     if e - s < 2.0:
+        both = _select_pair(tracks, ref_pick, user_pick, relaxed=True)[2:]
+        if want[0] is not None and want[0] >= both[1] - 2.0 or want[1] is not None and want[1] <= both[0] + 2.0:
+            raise ValueError(
+                f"選んだ二人を同時に追跡できているのは {fmt_time(both[0])}〜{fmt_time(both[1])} だけで、"
+                f"指定した区間と重なりません。「人物を選ぶ時刻」を比較したい区間の中にして、人物を選び直してください"
+                "（人が重なったり画面から外れたりすると、追跡が途切れて別の人として扱われることがあります）")
         raise ValueError(f"比較する区間が短すぎます（{fmt_time(s)}〜{fmt_time(e)}）")
     if sync is not None and sync.start is not None:
         notes.append(f"比較した区間: {fmt_time(s)}〜{fmt_time(e)}（二人の動きがそろっている所から自動で推定。"
