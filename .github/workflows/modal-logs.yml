@@ -1,0 +1,36 @@
+# サーバー版（Modal）のログを取り出す（手動で実行）. 調査用
+name: サーバー版のログ
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "いつからのログか（例: 3h, 30m）"
+        default: "3h"
+      search:
+        description: "この文字を含む行だけ（空ならすべて）"
+        default: ""
+      exclude:
+        description: "この文字を含む行を除く（正規表現）"
+        default: "_stcore/(health|host-config)"
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q modal
+      - name: ログ
+        env:
+          SINCE: ${{ inputs.since }}
+          SEARCH: ${{ inputs.search }}
+          EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          args=(dance-compare --since "$SINCE" --tail 2000 --timestamps --show-function-id --show-container-id)
+          if [ -n "$SEARCH" ]; then args+=(--search "$SEARCH"); fi
+          timeout 180 modal app logs "${args[@]}" 2>&1 | grep -Ev "${EXCLUDE:-^$}" | tail -400 || true
