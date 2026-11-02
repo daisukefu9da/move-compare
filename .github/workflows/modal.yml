@@ -7,7 +7,7 @@ name: サーバー版を Modal に公開
 on:
   push:
     branches: [claude/beautiful-knuth-hfbfqy]
-    paths: ["app.py", "dance_compare/**", "deploy/**", ".streamlit/**", ".github/workflows/modal.yml"]
+    paths: ["app.py", "server.py", "dance_compare/**", "deploy/**", ".streamlit/**", ".github/workflows/modal.yml"]
   workflow_dispatch:
 
 concurrency:

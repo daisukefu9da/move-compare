@@ -26,6 +26,8 @@ from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_
 from dance_compare.pose import remote
 from dance_compare.pose.remote import remote_target, warm
 from dance_compare.ui import background
+from dance_compare.ui.uploader import endpoint as upload_endpoint
+from dance_compare.ui.uploader import video_uploader
 from dance_compare.ui.library import delete_model, list_models, save_model
 from dance_compare.ui.trimmer import range_picker, time_picker
 
@@ -80,8 +82,25 @@ def _save_upload(up) -> str:
     return p
 
 
+def _uploaded(label: str, key: str) -> str | None:
+    """端末の中で軽くしてから送るアップロード欄（server.py で起動したとき）."""
+    path, info = video_uploader(label, key=f"{key}_up2")
+    if path and st.session_state.get(f"_{key}_logged") != path:
+        st.session_state[f"_{key}_logged"] = path
+        background.log_time(f"動画を軽くする（端末）{info['original_size'] / 1e6:.0f}MB→{info['size'] / 1e6:.0f}MB",
+                            info.get("shrink_s", 0))
+        background.log_time("動画の送信", info.get("send_s", 0))
+    return path
+
+
 def video_input(label: str, key: str) -> str | None:
     """撮影・アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
+    if upload_endpoint():
+        path = _uploaded(label, key)
+        if path and remote_target() and not st.session_state.get("_gpu_warmed"):
+            warm()
+            st.session_state["_gpu_warmed"] = True
+        return path
     up = st.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up",
                           help="スマホでは、ここから「ビデオを撮る」でその場で撮影できます")
     path = None

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --fg: #31333f; --sub: #808495; --line: #d6d6d9; --btn: #f0f2f6; --accent: #ff4b4b; --ok: #21a366; }
+  html, body { margin: 0; padding: 0; background: transparent; color: var(--fg);
+    font-family: "Source Sans Pro", -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; font-size: 14px; }
+  #wrap { padding: 2px 2px 8px; }
+  #label { margin-bottom: 6px; }
+  .box { border: 1px dashed var(--line); border-radius: 10px; padding: 14px; background: var(--btn); }
+  label.pick { display: inline-block; background: var(--accent); color: #fff; border-radius: 8px; padding: 10px 16px;
+    cursor: pointer; font-weight: 600; }
+  input[type=file] { display: none; }
+  #name { margin-top: 8px; word-break: break-all; }
+  #status { margin-top: 6px; color: var(--sub); }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--accent); }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; margin-top: 8px; overflow: hidden; display: none; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  @media (pointer: coarse) { label.pick { padding: 12px 18px; font-size: 16px; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="label"></div>
+  <div class="box">
+    <label class="pick">🎥 動画を撮影・選択<input id="file" type="file" accept="video/*"></label>
+    <div id="name"></div>
+    <div class="bar" id="bar"><div id="fill"></div></div>
+    <div id="status"></div>
+  </div>
+</div>
+<script type="module">
+// 動画を端末の中で軽くしてから（WebCodecs + Mediabunny）、小分けにしてサーバーへ送る。
+// 軽くできない端末・動画では、元の動画をそのまま送る。
+const $ = (id) => document.getElementById(id);
+const S = { args: {}, busy: false };
+const send = (type, data) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data || {}), "*");
+const setHeight = () => send("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight });
+const mb = (n) => (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + " MB";
+
+function status(text, cls = "") { $("status").textContent = text; $("status").className = cls; setHeight(); }
+function progress(p) {
+  $("bar").style.display = p == null ? "none" : "block";
+  $("fill").style.width = `${Math.round((p || 0) * 100)}%`;
+  setHeight();
+}
+
+async function shrink(file, maxSide, fps, bitrate) {
+  if (!("VideoEncoder" in window)) return null;
+  const m = await import("./mediabunny.min.mjs");
+  const input = new m.Input({ formats: m.ALL_FORMATS, source: new m.BlobSource(file) });
+  const vt = await input.getPrimaryVideoTrack();
+  if (!vt) return null;
+  const dw = vt.displayWidth, dh = vt.displayHeight;
+  const k = Math.min(1, maxSide / Math.max(dw, dh));
+  const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+  const w = even(dw * k), h = even(dh * k);
+  // H.264 を優先し、使えない端末では使える形式で（サーバー側の ffmpeg / OpenCV はどれも読める）
+  const vcodec = await m.getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"], { width: w, height: h });
+  if (!vcodec) return null;
+  const at = await input.getPrimaryAudioTrack();
+  const acodec = at ? await m.getFirstEncodableAudioCodec(["aac", "opus"], { numberOfChannels: at.numberOfChannels,
+                                                                            sampleRate: at.sampleRate }) : null;
+  const output = new m.Output({ format: new m.Mp4OutputFormat({ fastStart: "in-memory" }), target: new m.BufferTarget() });
+  const conv = await m.Conversion.init({
+    input, output, showWarnings: false,
+    video: { width: w, height: h, fit: "contain", frameRate: fps, codec: vcodec, bitrate },
+    audio: acodec ? { codec: acodec, bitrate: 128e3 } : { discard: true },
+  });
+  if (!conv.isValid) return null;
+  conv.onProgress = (p) => { progress(p); status(`動画を軽くしています… ${Math.round(p * 100)}%`); };
+  await conv.execute();
+  return new Blob([output.target.buffer], { type: "video/mp4" });
+}
+
+async function upload(blob, name) {
+  const id = crypto.randomUUID();
+  const chunk = S.args.chunk_mb * 1024 * 1024;
+  let offset = 0, tries = 0;
+  while (offset < blob.size || blob.size === 0) {
+    const end = Math.min(blob.size, offset + chunk);
+    const final = end >= blob.size ? 1 : 0;
+    const url = `${S.args.endpoint}?id=${id}&offset=${offset}&final=${final}&name=${encodeURIComponent(name)}`;
+    let res;
+    try {
+      res = await fetch(url, { method: "POST", body: blob.slice(offset, end) });
+    } catch (e) {
+      if (++tries > 5) throw e;  // 電波が途切れた場合などは、少し待って同じ所から送り直す
+      await new Promise((r) => setTimeout(r, 1000 * tries));
+      continue;
+    }
+    const j = await res.json().catch(() => ({}));
+    if (res.status === 409 && typeof j.size === "number") { offset = j.size; continue; }
+    if (!res.ok) throw new Error(`送信に失敗しました（${res.status} ${j.error || ""}）`);
+    tries = 0;
+    offset = end;
+    progress(offset / blob.size);
+    status(`送信中… ${mb(offset)} / ${mb(blob.size)}`);
+    if (final) break;
+  }
+  return id;
+}
+
+$("file").addEventListener("change", async () => {
+  const file = $("file").files[0];
+  if (!file || S.busy) return;
+  S.busy = true;
+  $("name").textContent = `${file.name}（${mb(file.size)}）`;
+  const t0 = performance.now();
+  let blob = null, shrinkMs = 0;
+  try {
+    status("動画を軽くしています…");
+    progress(0);
+    try {
+      blob = await shrink(file, S.args.max_side, S.args.fps, S.args.bitrate);
+    } catch (e) {
+      console.warn("軽くできませんでした", e);
+      blob = null;
+    }
+    shrinkMs = performance.now() - t0;
+    // 軽くできなかった・かえって大きくなった場合は元の動画を送る
+    const useOriginal = !blob || blob.size >= file.size;
+    const body = useOriginal ? file : blob;
+    const name = useOriginal ? file.name : file.name.replace(/\.[^.]+$/, "") + ".mp4";
+    status(useOriginal ? "送信中…（元の動画のまま送ります）" : `送信中…（${mb(file.size)} → ${mb(blob.size)} に軽くしました）`);
+    progress(0);
+    const t1 = performance.now();
+    const id = await upload(body, name);
+    const sendMs = performance.now() - t1;
+    progress(null);
+    status(useOriginal ? `送信しました（${mb(file.size)}）` : `送信しました（${mb(file.size)} → ${mb(blob.size)}）`, "ok");
+    send("streamlit:setComponentValue", {
+      dataType: "json",
+      value: { id, name, original_size: file.size, size: body.size, shrunk: !useOriginal,
+               shrink_s: shrinkMs / 1000, send_s: sendMs / 1000 },
+    });
+  } catch (e) {
+    progress(null);
+    status(`エラー: ${e.message || e}`, "err");
+  } finally {
+    S.busy = false;
+    $("file").value = "";  // 同じ動画をもう一度選んでも反応するように
+  }
+});
+
+window.addEventListener("message", (ev) => {
+  const msg = ev.data;
+  if (!msg || msg.type !== "streamlit:render") return;
+  S.args = msg.args || {};
+  $("label").textContent = S.args.label || "";
+  if (msg.theme && msg.theme.base === "dark") {
+    const r = document.documentElement.style;
+    r.setProperty("--fg", msg.theme.textColor || "#fafafa"); r.setProperty("--btn", "#262730"); r.setProperty("--line", "#4a4c56");
+  }
+  setHeight();
+});
+window.addEventListener("resize", setHeight);
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

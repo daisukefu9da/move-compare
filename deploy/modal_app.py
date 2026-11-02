@@ -33,6 +33,7 @@ image = (
     .add_local_dir(str(ROOT / "dance_compare"), f"{APP_DIR}/dance_compare", ignore=["**/__pycache__"])
     .add_local_dir(str(ROOT / ".streamlit"), f"{APP_DIR}/.streamlit")
     .add_local_file(str(ROOT / "app.py"), f"{APP_DIR}/app.py")
+    .add_local_file(str(ROOT / "server.py"), f"{APP_DIR}/server.py")
 )
 
 app = modal.App("dance-compare", image=image)
@@ -72,7 +73,7 @@ def ui():
     import subprocess
 
     subprocess.Popen(
-        "streamlit run app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true "
+        "streamlit run server.py --server.port 8000 --server.address 0.0.0.0 --server.headless true "
         "--server.enableCORS false --server.enableXsrfProtection false --server.websocketPingInterval 20",
         shell=True, cwd=APP_DIR,
     )

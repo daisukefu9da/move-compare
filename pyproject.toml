@@ -30,7 +30,7 @@ include = ["dance_compare*"]
 
 [tool.setuptools.package-data]
 "dance_compare.pose" = ["*.yaml"]
-"dance_compare.ui" = ["frontend/*/*.html"]
+"dance_compare.ui" = ["frontend/*/*.html", "frontend/*/*.mjs", "frontend/*/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
