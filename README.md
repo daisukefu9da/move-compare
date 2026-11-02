@@ -78,7 +78,8 @@ streamlit run app.py
 骨格推定だけを GPU のコンテナ（T4 → L4 → A10G の空いているもの）で行います。GPU が 150 秒待っても空かなければ CPU で推定します。
 
 - 公開: このブランチに push すると `.github/workflows/modal.yml` が自動で `modal deploy` する
-  （GitHub の Secrets に `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` / `APP_PASSWORD` が必要。パスワードが無いと公開しない）
+  （GitHub の Secrets に `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` が必要）
+- パスワードはかけていない（URL を知っていれば誰でも開ける）
 - 費用: GPU は骨格推定の間だけ（最後に使ってから 2 分で止まる）。画面のサーバー（CPU）は最後に使ってから 10 分で止まる
 - 状態の確認: GitHub Actions の「サーバー版の状態を確認」を手動で実行すると、ログとサイトの応答時間が見られる
 - 動画の扱い: アップロードした動画・解析結果はコンテナが止まると消える。名前を付けて保存した手本だけが Volume に残る

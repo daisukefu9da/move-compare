@@ -5,7 +5,8 @@
 - 画面（今の app.py）は CPU のコンテナで動かし、骨格推定だけ GPU のコンテナ（track_pose）で行う。
   GPU が混んでいても画面は開ける。GPU がなかなか空かなければ CPU で推定する（pose/remote.py）。
   使っていない間はコンテナが止まり、課金も止まる
-- アクセス用のパスワードは Modal の Secret「dance-compare」の DANCE_COMPARE_PASSWORD
+- パスワードはかけていない（URL を知っていれば誰でも開ける）。かける場合は ui 関数に
+  secrets=[modal.Secret.from_name("dance-compare")]（DANCE_COMPARE_PASSWORD）を付ける
 - 保存した手本の動画だけを Volume（/data）に残す。アップロードした動画や解析結果はコンテナの一時領域に置き、
   コンテナが止まると消える（生徒の動画をサーバーに残さない）
 """
@@ -60,7 +61,6 @@ def track_pose(video: bytes, suffix: str) -> bytes:
     cpu=2.0,
     memory=4096,
     volumes={"/data": data},
-    secrets=[modal.Secret.from_name("dance-compare")],
     env={"DANCE_COMPARE_REMOTE_POSE": "dance-compare/track_pose"},  # 骨格推定は track_pose（GPU）に頼む
     timeout=60 * 60 * 4,       # 1 回の起動で使える最長時間
     scaledown_window=10 * 60,  # 画面のサーバーは CPU なので安い。最後に使ってから 10 分で止める
