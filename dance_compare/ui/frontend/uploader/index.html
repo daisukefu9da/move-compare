@@ -47,59 +47,76 @@ function progress(p) {
   setHeight();
 }
 
+// 軽くできなかった理由を残す（サーバーのログに出して、端末ごとの対応に使う）
+const diag = [];
+const note = (x) => { diag.push(x); console.warn(x); };
+
 async function shrink(file, maxSide, fps, bitrate) {
-  if (!("VideoEncoder" in window)) return null;
+  if (!("VideoEncoder" in window) || !("VideoDecoder" in window)) { note("WebCodecs なし"); return null; }
   const m = await import("./mediabunny.min.mjs");
   const input = new m.Input({ formats: m.ALL_FORMATS, source: new m.BlobSource(file) });
   const vt = await input.getPrimaryVideoTrack();
-  if (!vt) return null;
+  if (!vt) { note("映像なし"); return null; }
+  const codecStr = await vt.getCodecParameterString().catch(() => "?");
+  note(`元: ${vt.codec} ${codecStr} ${vt.displayWidth}x${vt.displayHeight}`);
+  if (!(await vt.canDecode())) { note("この端末では元の動画を読めない（デコード不可）"); return null; }
   const dw = vt.displayWidth, dh = vt.displayHeight;
   const k = Math.min(1, maxSide / Math.max(dw, dh));
   const even = (x) => Math.max(2, Math.round(x / 2) * 2);
   const w = even(dw * k), h = even(dh * k);
   // H.264 を優先し、使えない端末では使える形式で（サーバー側の ffmpeg / OpenCV はどれも読める）
   const vcodec = await m.getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"], { width: w, height: h });
-  if (!vcodec) return null;
+  if (!vcodec) { note("書き出せる形式なし（エンコード不可）"); return null; }
   const at = await input.getPrimaryAudioTrack();
-  const acodec = at ? await m.getFirstEncodableAudioCodec(["aac", "opus"], { numberOfChannels: at.numberOfChannels,
-                                                                            sampleRate: at.sampleRate }) : null;
+  const acodec = at && (await at.canDecode().catch(() => false))
+    ? await m.getFirstEncodableAudioCodec(["aac", "opus"], { numberOfChannels: at.numberOfChannels, sampleRate: at.sampleRate })
+    : null;
+  if (at && !acodec) note(`音声は省略（${at.codec}）`);
   const output = new m.Output({ format: new m.Mp4OutputFormat({ fastStart: "in-memory" }), target: new m.BufferTarget() });
   const conv = await m.Conversion.init({
     input, output, showWarnings: false,
     video: { width: w, height: h, fit: "contain", frameRate: fps, codec: vcodec, bitrate },
     audio: acodec ? { codec: acodec, bitrate: 128e3 } : { discard: true },
   });
-  if (!conv.isValid) return null;
+  if (!conv.isValid) {
+    note("変換できない: " + conv.discardedTracks.map((d) => `${d.track.type}:${d.reason}`).join(", "));
+    return null;
+  }
   conv.onProgress = (p) => { progress(p); status(`動画を軽くしています… ${Math.round(p * 100)}%`); };
   await conv.execute();
+  note(`変換: ${vcodec} ${w}x${h}`);
   return new Blob([output.target.buffer], { type: "video/mp4" });
 }
 
+// 小分けにして、同時に何本か送る（通信の往復の待ち時間を重ねて速くする）
 async function upload(blob, name) {
   const id = crypto.randomUUID();
   const chunk = S.args.chunk_mb * 1024 * 1024;
-  let offset = 0, tries = 0;
-  while (offset < blob.size || blob.size === 0) {
-    const end = Math.min(blob.size, offset + chunk);
-    const final = end >= blob.size ? 1 : 0;
-    const url = `${S.args.endpoint}?id=${id}&offset=${offset}&final=${final}&name=${encodeURIComponent(name)}`;
-    let res;
-    try {
-      res = await fetch(url, { method: "POST", body: blob.slice(offset, end) });
-    } catch (e) {
-      if (++tries > 5) throw e;  // 電波が途切れた場合などは、少し待って同じ所から送り直す
-      await new Promise((r) => setTimeout(r, 1000 * tries));
-      continue;
+  const n = Math.max(1, Math.ceil(blob.size / chunk));
+  let next = 0, sent = 0;
+  async function sendPart(i) {
+    const off = i * chunk, end = Math.min(blob.size, off + chunk);
+    for (let tries = 0; ; tries++) {
+      try {
+        const res = await fetch(`${S.args.endpoint}?id=${id}&offset=${off}`, { method: "POST", body: blob.slice(off, end) });
+        if (res.ok) break;
+        if (res.status < 500 || tries >= 5) throw new Error(`送信に失敗しました（${res.status}）`);
+      } catch (e) {
+        if (tries >= 5) throw e;  // 電波が途切れた場合などは、少し待ってその部分だけ送り直す
+      }
+      await new Promise((r) => setTimeout(r, 1000 * (tries + 1)));
     }
-    const j = await res.json().catch(() => ({}));
-    if (res.status === 409 && typeof j.size === "number") { offset = j.size; continue; }
-    if (!res.ok) throw new Error(`送信に失敗しました（${res.status} ${j.error || ""}）`);
-    tries = 0;
-    offset = end;
-    progress(offset / blob.size);
-    status(`送信中… ${mb(offset)} / ${mb(blob.size)}`);
-    if (final) break;
+    sent += end - off;
+    progress(sent / blob.size);
+    status(`送信中… ${mb(sent)} / ${mb(blob.size)}`);
   }
+  async function worker() {
+    while (next < n) await sendPart(next++);
+  }
+  await Promise.all(Array.from({ length: Math.min(S.args.parallel || 4, n) }, worker));
+  const res = await fetch(`${S.args.endpoint}?id=${id}&finalize=1&total=${blob.size}&name=${encodeURIComponent(name)}`,
+                          { method: "POST" });
+  if (!res.ok) throw new Error(`送信に失敗しました（最後の確認 ${res.status}）`);
   return id;
 }
 
@@ -110,13 +127,14 @@ $("file").addEventListener("change", async () => {
   $("name").textContent = `${file.name}（${mb(file.size)}）`;
   const t0 = performance.now();
   let blob = null, shrinkMs = 0;
+  diag.length = 0;
   try {
     status("動画を軽くしています…");
     progress(0);
     try {
       blob = await shrink(file, S.args.max_side, S.args.fps, S.args.bitrate);
     } catch (e) {
-      console.warn("軽くできませんでした", e);
+      note(`変換中のエラー: ${e && (e.name + ": " + e.message)}`);
       blob = null;
     }
     shrinkMs = performance.now() - t0;
@@ -134,7 +152,8 @@ $("file").addEventListener("change", async () => {
     send("streamlit:setComponentValue", {
       dataType: "json",
       value: { id, name, original_size: file.size, size: body.size, shrunk: !useOriginal,
-               shrink_s: shrinkMs / 1000, send_s: sendMs / 1000 },
+               shrink_s: shrinkMs / 1000, send_s: sendMs / 1000, diag: diag.join(" / "),
+               ua: navigator.userAgent },
     });
   } catch (e) {
     progress(null);

@@ -291,36 +291,48 @@ def save_outputs(result: AnalysisResult, out_dir: str, narrator, render: bool = 
         "user_pose": os.path.join(out_dir, "user_pose.json"),
         "findings_csv": os.path.join(out_dir, "findings.csv"),
     }
-    # 「直すところ」の静止画と短い動画（文章から参照するので先に作る）
+    # 「直すところ」の静止画と短い動画は、比較動画と同時に別のスレッドで作る（CPU を並列に使って待ち時間を減らす）
+    from concurrent.futures import ThreadPoolExecutor
+
     from .render.stills import render_moment_clips, render_moments
 
     for old in os.listdir(out_dir):  # 前回の静止画・短い動画が残らないように
         if old.startswith("moment_") and old.endswith((".jpg", ".mp4")):
             os.remove(os.path.join(out_dir, old))
-    try:
-        paths["moments"] = render_moments(result.report, result.ref_video, result.user_video,
-                                          result.ref_seq, result.user_seq, out_dir)
-    except Exception as e:  # 静止画が作れなくても解析結果は返す
-        result.notes.append(f"静止画を作れませんでした: {e}")
-    try:
-        paths["moment_clips"] = render_moment_clips(result.report, result.ref_video, result.user_video,
-                                                    result.ref_seq, result.user_seq, out_dir)
-    except Exception as e:
-        result.notes.append(f"直すところの短い動画を作れませんでした: {e}")
+
+    def moments_job() -> list[str]:
+        notes = []
+        try:
+            paths["moments"] = render_moments(result.report, result.ref_video, result.user_video,
+                                              result.ref_seq, result.user_seq, out_dir)
+        except Exception as e:  # 静止画が作れなくても解析結果は返す
+            notes.append(f"静止画を作れませんでした: {e}")
+        try:
+            paths["moment_clips"] = render_moment_clips(result.report, result.ref_video, result.user_video,
+                                                        result.ref_seq, result.user_seq, out_dir)
+        except Exception as e:
+            notes.append(f"直すところの短い動画を作れませんでした: {e}")
+        return notes
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        moments = pool.submit(moments_job)
+        # 比較動画（失敗しても解析結果は保存し、理由を処理メモに残す）. 進み具合の表示があるのでこのスレッドで作る
+        if render:
+            from .render.overlay import render_comparison
+
+            video = os.path.join(out_dir, "comparison.mp4")
+            try:
+                render_comparison(result.report, result.ref_video, result.user_video, result.ref_seq,
+                                  result.user_seq, video,
+                                  angle_threshold=result.report.meta["config"]["angle_threshold_deg"],
+                                  progress=progress, notes=result.notes)
+                paths["video"] = video
+            except Exception as e:  # 動画が作れなくても解析結果は返す
+                result.notes.append(f"比較動画を作れませんでした: {e}")
+        result.notes.extend(moments.result())
+    # 文章は「直すところ」の静止画を参照するので、それができてから作る
     text = narrator if isinstance(narrator, str) else narrator.narrate(result.report)
     paths["text"] = text
-    # 比較動画（失敗しても解析結果は保存し、理由を処理メモに残す）
-    if render:
-        from .render.overlay import render_comparison
-
-        video = os.path.join(out_dir, "comparison.mp4")
-        try:
-            render_comparison(result.report, result.ref_video, result.user_video, result.ref_seq, result.user_seq,
-                              video, angle_threshold=result.report.meta["config"]["angle_threshold_deg"],
-                              progress=progress, notes=result.notes)
-            paths["video"] = video
-        except Exception as e:  # 動画が作れなくても解析結果は返す
-            result.notes.append(f"比較動画を作れませんでした: {e}")
     with open(paths["json"], "w", encoding="utf-8") as f:
         json.dump(result.report.to_dict(), f, ensure_ascii=False, indent=1)
     with open(paths["markdown"], "w", encoding="utf-8") as f:

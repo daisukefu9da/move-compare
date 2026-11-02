@@ -90,6 +90,7 @@ def _uploaded(label: str, key: str) -> str | None:
         background.log_time(f"動画を軽くする（端末）{info['original_size'] / 1e6:.0f}MB→{info['size'] / 1e6:.0f}MB",
                             info.get("shrink_s", 0))
         background.log_time("動画の送信", info.get("send_s", 0))
+        print(f"[端末] 軽くする: {info.get('diag', '')} | {info.get('ua', '')}", flush=True)
     return path
 
 
@@ -395,11 +396,14 @@ else:
                 st.caption("画像をタップすると、その人物を下の欄で選びやすくなります")
                 pt = streamlit_image_coordinates(img, key="pick", image_format="JPEG", jpeg_quality=85,
                                                  use_column_width="always")
-                if pt:
+                if pt and boxes:  # 人が映っていない時刻では、前にタップした位置は使わない
                     s = img.shape[1] / pt.get("width", img.shape[1]) * to_orig  # 表示上の座標 → 元の動画の座標
                     from dance_compare.pose.tracking import pick_by_point
-                    clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
-                    st.info(f"タップした人物: ID {clicked}")
+                    try:
+                        clicked = pick_by_point(extract_tracks(video, backend), f, pt["x"] * s, pt["y"] * s)
+                        st.info(f"タップした人物: ID {clicked}")
+                    except ValueError:
+                        clicked = None
             except ImportError:
                 st.image(img, caption=f"{fmt_time(f / extract_tracks(video, backend).fps)} の人物", width="stretch")
             if len(ids) < 2:

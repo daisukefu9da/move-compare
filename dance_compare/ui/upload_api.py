@@ -1,20 +1,25 @@
 """動画のアップロードを受け取る口（Streamlit の st.App に追加するルート. server.py から使う）.
 
-スマホの画面（ui/frontend/uploader）は、動画を端末の中で軽くしてから、小分け（チャンク）にして送る。
-1 回の通信を短くして、サーバー（Modal）の 1 リクエストあたりの時間制限に掛からないようにする。
+スマホの画面（ui/frontend/uploader）は、動画を端末の中で軽くしてから、小分け（チャンク）にして同時に何本か送る。
+1 回の通信を短くしてサーバー（Modal）の 1 リクエストあたりの時間制限に掛からないようにし、
+同時に送ることで通信の往復の待ち時間（日本 ↔ 米国）を重ねる。
 
-    POST /api/upload?id=<ランダムな ID>&offset=<これまでに送ったバイト数>&final=<最後なら 1>&name=<ファイル名>
+    POST /api/upload?id=<ランダムな ID>&offset=<この部分の先頭の位置>            （本体: この部分のバイト列）
+    POST /api/upload?id=<ID>&finalize=1&total=<全体の大きさ>&name=<ファイル名>  （全部送り終わったら）
 """
 
 from __future__ import annotations
 
 import os
 import re
+import threading
 
 UPLOAD_DIR = os.environ.get("DANCE_COMPARE_UPLOAD_DIR", ".cache/uploads")
-MAX_CHUNK = 16 * 1024 * 1024      # 1 回に受け取る大きさの上限
+MAX_CHUNK = 16 * 1024 * 1024        # 1 回に受け取る大きさの上限
 MAX_TOTAL = 4 * 1024 * 1024 * 1024  # 1 本の動画の大きさの上限
 _ID = re.compile(r"^[0-9a-f-]{8,64}$")
+_lock = threading.Lock()
+_received: dict[str, dict[int, int]] = {}  # id -> {offset: 受け取った大きさ}
 
 
 def _safe_name(name: str) -> str:
@@ -34,28 +39,45 @@ def resolve(upload_id: str, name: str) -> str | None:
     return path if os.path.exists(path) else None
 
 
+def _int(q, key: str) -> int | None:
+    try:
+        return int(q.get(key, ""))
+    except ValueError:
+        return None
+
+
 async def upload_chunk(request):
     from starlette.responses import JSONResponse
 
     q = request.query_params
-    upload_id, name = q.get("id", ""), q.get("name", "")
+    upload_id = q.get("id", "")
     if not _ID.match(upload_id):
         return JSONResponse({"error": "bad id"}, status_code=400)
-    try:
-        offset = int(q.get("offset", "0"))
-    except ValueError:
-        return JSONResponse({"error": "bad offset"}, status_code=400)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     part = os.path.join(UPLOAD_DIR, f"{upload_id}.part")
-    size = os.path.getsize(part) if os.path.exists(part) else 0
-    if offset != size:  # 送り直し・順番違い: いまの大きさを返して、そこから続けてもらう
-        return JSONResponse({"error": "offset", "size": size}, status_code=409)
+
+    if q.get("finalize") == "1":
+        total = _int(q, "total")
+        with _lock:
+            got = sum(_received.get(upload_id, {}).values())
+        if total is None or got != total or not os.path.exists(part):
+            return JSONResponse({"error": "incomplete", "received": got}, status_code=409)
+        os.replace(part, final_path(upload_id, q.get("name", "")))
+        with _lock:
+            _received.pop(upload_id, None)
+        return JSONResponse({"size": total})
+
+    offset = _int(q, "offset")
+    if offset is None or offset < 0:
+        return JSONResponse({"error": "bad offset"}, status_code=400)
     body = await request.body()
-    if len(body) > MAX_CHUNK or size + len(body) > MAX_TOTAL:
+    if len(body) > MAX_CHUNK or offset + len(body) > MAX_TOTAL:
         return JSONResponse({"error": "too large"}, status_code=413)
-    with open(part, "ab") as f:
-        f.write(body)
-    size += len(body)
-    if q.get("final") == "1":
-        os.replace(part, final_path(upload_id, name))
-    return JSONResponse({"size": size})
+    fd = os.open(part, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        os.pwrite(fd, body, offset)  # 届いた順番に関係なく、決まった位置に書く
+    finally:
+        os.close(fd)
+    with _lock:
+        _received.setdefault(upload_id, {})[offset] = len(body)  # 同じ部分の送り直しは上書き
+    return JSONResponse({"size": len(body)})
