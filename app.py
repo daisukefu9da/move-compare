@@ -64,6 +64,9 @@ def _check_password():
 
 
 _check_password()
+if remote_target() and not st.session_state.get("_gpu_warmed"):
+    warm()  # 画面を開いた時点で骨格推定用の GPU を起こしておく（動画を送り終わる頃には準備ができている）
+    st.session_state["_gpu_warmed"] = True
 st.markdown("## ダンス比較")
 # モードはスマホでも見える本文に置く（サイドバーはスマホでは閉じている）
 mode = st.radio("比べ方", ["2動画モード", "1動画モード"], horizontal=True,
@@ -97,11 +100,7 @@ def _uploaded(label: str, key: str) -> str | None:
 def video_input(label: str, key: str) -> str | None:
     """撮影・アップロード or ローカルのパス指定で動画を受け取り、ファイルパスを返す."""
     if upload_endpoint():
-        path = _uploaded(label, key)
-        if path and remote_target() and not st.session_state.get("_gpu_warmed"):
-            warm()
-            st.session_state["_gpu_warmed"] = True
-        return path
+        return _uploaded(label, key)
     up = st.file_uploader(label, type=["mp4", "mov", "m4v", "avi", "webm"], key=f"{key}_up",
                           help="スマホでは、ここから「ビデオを撮る」でその場で撮影できます")
     path = None
@@ -114,9 +113,6 @@ def video_input(label: str, key: str) -> str | None:
         path = _save_upload(up)
         if time.time() - t0 > 0.5:
             background.log_time(f"アップロードした動画の保存（{up.size / 1e6:.0f} MB）", time.time() - t0)
-        if remote_target() and not st.session_state.get("_gpu_warmed"):
-            warm()  # 骨格推定用の GPU を先に起こしておく（「人物を検出」「解析する」での待ちを減らす）
-            st.session_state["_gpu_warmed"] = True
         return path
     if path:
         path = path.strip().strip('"').strip("'")  # ドラッグ＆ドロップや「パスをコピー」で付く引用符を除く

@@ -60,6 +60,9 @@ async function shrink(file, maxSide, fps, bitrate) {
   if (!vt) { note("映像なし"); return null; }
   const codecStr = await vt.getCodecParameterString().catch(() => "?");
   note(`元: ${vt.codec} ${codecStr} ${vt.displayWidth}x${vt.displayHeight}`);
+  // 前にこの端末で読めなかった形式・大きさなら、試さずにすぐ送る（失敗するまでに数秒かかるため）
+  S.failKey = `shrink-fail:${codecStr}:${vt.displayWidth}x${vt.displayHeight}`;
+  try { if (localStorage.getItem(S.failKey)) { note("前に読めなかった形式なので省略"); return null; } } catch (e) { /* 使えない環境 */ }
   if (!(await vt.canDecode())) { note("この端末では元の動画を読めない（デコード不可）"); return null; }
   const dw = vt.displayWidth, dh = vt.displayHeight;
   const k = Math.min(1, maxSide / Math.max(dw, dh));
@@ -221,8 +224,9 @@ $("file").addEventListener("change", async () => {
     } catch (e) {
       note(`変換中のエラー: ${e && (e.name + ": " + e.message)}`);
       blob = null;
+      try { if (S.failKey) localStorage.setItem(S.failKey, "1"); } catch (e2) { /* 使えない環境 */ }
     }
-    if (!blob) {  // 読めなかった場合は、再生しながら縮める方式で
+    if (!blob && S.args.method === "video") {  // 再生しながら縮める方式（iPhone では遅く逆効果だったので、確認用のみ）
       try {
         blob = await shrinkViaVideo(file, S.args.max_side, S.args.fps, S.args.bitrate);
       } catch (e) {

@@ -82,9 +82,15 @@ def track_bytes(data: bytes, suffix: str) -> bytes:
     import tempfile
 
     if not data:
+        import numpy as np
         from ultralytics import YOLO
 
-        YOLO(YoloPoseBackend().model_name)  # ライブラリとモデルを読み込んでおく
+        from .yolo import auto_device
+
+        # ライブラリ・モデル・GPU の準備（初回の推定にかかる数秒）を先に済ませておく
+        device = auto_device()
+        YOLO(YoloPoseBackend().model_name).predict(np.zeros((640, 640, 3), np.uint8), device=device,
+                                                   half=device == "cuda", verbose=False)
         return b""
     with tempfile.NamedTemporaryFile(suffix=suffix or ".mp4") as f:
         f.write(data)

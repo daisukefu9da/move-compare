@@ -43,7 +43,7 @@ data = modal.Volume.from_name("dance-compare-data", create_if_missing=True)
 @app.function(
     gpu=["T4", "L4", "A10G"],  # 安い順に、空いている GPU を使う（T4 だけだと混んでいて起動できないことがあった）
     timeout=15 * 60,
-    scaledown_window=2 * 60,   # 最後に使ってから 2 分で止める（GPU の課金を止める）
+    scaledown_window=5 * 60,   # 最後に使ってから 5 分で止める（画面を開いた時に起こすので、動画を送り終わるまで待てるように）
     max_containers=2,
 )
 def track_pose(video: bytes, suffix: str) -> bytes:

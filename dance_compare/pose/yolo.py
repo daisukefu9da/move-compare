@@ -20,12 +20,13 @@ class YoloPoseBackend:
     name = "yolo"
 
     def __init__(self, model: str = "yolo11n-pose.pt", tracker: str = DEFAULT_TRACKER,
-                 conf: float = 0.3, device: str | None = None, imgsz: int = 640):
+                 conf: float = 0.3, device: str | None = None, imgsz: int = 640, batch: int | None = None):
         self.model_name = model
         self.tracker = tracker
         self.conf = conf
         self.device = device
         self.imgsz = imgsz
+        self.batch = batch  # 何コマずつまとめて推定するか（None: GPU なら 16, CPU なら 8. 結果は 1 コマずつと同じ）
 
     @property
     def cache_key(self) -> str:
@@ -52,7 +53,8 @@ class YoloPoseBackend:
         ts = TrackSet(info.fps, info.width, info.height, max(info.frames, 1))
         results = model.track(source=video_path, stream=True, persist=True, tracker=self.tracker,
                               conf=self.conf, imgsz=self.imgsz, device=device, verbose=False,
-                              half=device == "cuda")  # NVIDIA の GPU では半精度で速く（結果はほぼ同じ）
+                              half=device == "cuda",  # NVIDIA の GPU では半精度で速く（結果はほぼ同じ）
+                              batch=self.batch or (16 if device in ("cuda", "mps") else 8))
         n = 0
         for i, r in enumerate(results):
             n = i + 1
