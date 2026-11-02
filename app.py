@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,7 @@ from dance_compare.pipeline import (Pick, Rhythm, analyze_single_video, analyze_
                                     extract_tracks, save_outputs, suggest_range)
 from dance_compare.pose import remote
 from dance_compare.pose.remote import remote_target, warm
+from dance_compare.ui import background
 from dance_compare.ui.library import delete_model, list_models, save_model
 from dance_compare.ui.trimmer import range_picker, time_picker
 
@@ -88,10 +90,14 @@ def video_input(label: str, key: str) -> str | None:
             path = st.text_input("ファイルのパス", key=f"{key}_path",
                                  help="大きい動画はアップロードせず、ここにパスを入れる方が速い（ファイルをこの欄にドラッグ＆ドロップでも可）")
     if up is not None:
+        t0 = time.time()
+        path = _save_upload(up)
+        if time.time() - t0 > 0.5:
+            background.log_time(f"アップロードした動画の保存（{up.size / 1e6:.0f} MB）", time.time() - t0)
         if remote_target() and not st.session_state.get("_gpu_warmed"):
             warm()  # 骨格推定用の GPU を先に起こしておく（「人物を検出」「解析する」での待ちを減らす）
             st.session_state["_gpu_warmed"] = True
-        return _save_upload(up)
+        return path
     if path:
         path = path.strip().strip('"').strip("'")  # ドラッグ＆ドロップや「パスをコピー」で付く引用符を除く
         if os.path.exists(path):
@@ -310,6 +316,9 @@ result = None
 if mode == "2動画モード":
     ref_video = model_input()
     user_video = video_input("レビュー対象の動画", "user")
+    for v in (ref_video, user_video):
+        if v:
+            background.start(v, backend)  # 選んだらすぐ裏で下ごしらえ（軽い動画の作成 → 骨格推定）を始める
     r0 = r1 = u0 = u1 = None
     if ref_video and user_video:
         if st.checkbox("比較する区間を指定する（任意）",
@@ -324,19 +333,27 @@ if mode == "2動画モード":
     if st.button("解析する", type="primary", disabled=not (ref_video and user_video)):
         prog = Progress()
         with st.spinner("解析中…（初回は骨格推定に時間がかかります）"):
+            t0 = time.time()
+            background.wait(ref_video, backend)
+            background.wait(user_video, backend)
             result = analyze_two_videos(
                 ref_video, user_video, cfg, backend=backend, mirror=mirror,
                 ref_range=(r0 or None, r1), user_range=(u0 or None, u1),
                 audio_sync=audio_sync, rhythm=rhythm, progress=prog)
             if remote.LAST_NOTE:
                 result.notes.append(remote.LAST_NOTE)
+            background.log_time("解析（骨格推定を待つ時間を含む）", time.time() - t0)
 else:
     video = video_input("動画（二人以上が映っているもの）", "single")
     if video:
+        background.start(video, backend)  # 選んだらすぐ裏で下ごしらえ（軽い動画の作成 → 骨格推定）を始める
         if st.button("人物を検出"):
             prog = Progress()
             with st.spinner("骨格推定中…（サーバーの GPU の準備に少しかかることがあります）" if remote_target() else "骨格推定中…"):
+                t0 = time.time()
+                background.wait(video, backend)  # 裏で始めた推定が終わるのを待つ（終わっていればすぐ）
                 extract_tracks(video, backend, progress=lambda i, n: prog("骨格推定", i, n))
+                background.log_time("人物を検出（ボタンを押してから）", time.time() - t0)
             st.session_state["detected"] = video
             st.session_state["pose_note"] = remote.LAST_NOTE
         if st.session_state.get("pose_note") and st.session_state.get("detected") == video:
@@ -379,17 +396,21 @@ else:
                 if st.button("解析する", type="primary", disabled=ref_id == user_id):
                     prog = Progress()
                     with st.spinner("解析中…"):
+                        t0 = time.time()
                         result = analyze_single_video(video, Pick(ref_id), Pick(user_id), cfg,
                                                       backend=backend, mirror=mirror, rhythm=rhythm, progress=prog,
                                                       time_range=(start, end), auto_range=auto_range)
+                        background.log_time("解析", time.time() - t0)
 
 if result is not None:
     narrator = get_narrator(narrator_name)
     out_dir = os.path.join(OUT_DIR, "latest")
     with st.spinner("比較動画を作成中…" if make_video else "保存中…"):
         prog = Progress() if make_video else None
+        t0 = time.time()
         paths = save_outputs(result, out_dir, narrator, render=make_video,
                              progress=(lambda i, n: prog("比較動画", i, n)) if prog else None)
+        background.log_time("比較動画・直すところの動画の作成", time.time() - t0)
     st.session_state["last"] = (result, paths["text"], paths, getattr(narrator, "last_error", None))
 
 # ---------------------------------------------------------------------------

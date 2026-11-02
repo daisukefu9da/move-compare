@@ -51,7 +51,8 @@ class YoloPoseBackend:
         model = YOLO(self.model_name)
         ts = TrackSet(info.fps, info.width, info.height, max(info.frames, 1))
         results = model.track(source=video_path, stream=True, persist=True, tracker=self.tracker,
-                              conf=self.conf, imgsz=self.imgsz, device=device, verbose=False)
+                              conf=self.conf, imgsz=self.imgsz, device=device, verbose=False,
+                              half=device == "cuda")  # NVIDIA の GPU では半精度で速く（結果はほぼ同じ）
         n = 0
         for i, r in enumerate(results):
             n = i + 1

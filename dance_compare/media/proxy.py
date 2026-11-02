@@ -32,8 +32,15 @@ class Proxy:
         return self.scale_x == 1.0 and self.scale_y == 1.0
 
 
-def make_proxy(video: str, max_side: int = 960, max_fps: float = 30.0, progress=None) -> Proxy:
-    """長辺 max_side・max_fps 以下の分析用動画を作る（作成済みなら再利用）."""
+@dataclass
+class ProxyPlan:
+    """分析用動画の作り方（作る必要が無ければ out は None）."""
+    out: str | None
+    vf: str               # ffmpeg の映像フィルタ
+    original: Proxy       # 元の動画の情報
+
+
+def proxy_plan(video: str, max_side: int = 960, max_fps: float = 30.0) -> ProxyPlan:
     info = probe(video)
     # 回転情報（縦向きの iPhone 動画など）を反映した実際のコマの大きさを使う
     h, w = read_frame(video, 0).shape[:2]
@@ -41,17 +48,35 @@ def make_proxy(video: str, max_side: int = 960, max_fps: float = 30.0, progress=
     fps = min(info.fps, max_fps) if info.fps > 0 else max_fps
     original = Proxy(video, 1.0, 1.0, w, h, info.fps)
     if (scale >= 1.0 and info.fps <= max_fps + 0.5) or shutil.which("ffmpeg") is None:
-        return original
+        return ProxyPlan(None, "", original)
     pw, ph = max(2, int(round(w * scale / 2)) * 2), max(2, int(round(h * scale / 2)) * 2)
     st = os.stat(video)
     key = hashlib.sha1(f"{os.path.abspath(video)}|{st.st_size}|{int(st.st_mtime)}|{pw}x{ph}@{fps}".encode()).hexdigest()[:16]
-    out = os.path.join(PROXY_DIR, f"{key}.mp4")
+    return ProxyPlan(os.path.join(PROXY_DIR, f"{key}.mp4"), f"fps={fps},scale={pw}:{ph}", original)
+
+
+# 分析用動画の ffmpeg の出力設定（速さ優先, 音声なし）
+PROXY_OUTPUT = ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p"]
+
+
+def _finish(plan: ProxyPlan) -> Proxy:
+    # 実際にできた大きさから倍率を求める
+    o = plan.original
+    ph2, pw2 = read_frame(plan.out, 0).shape[:2]
+    return Proxy(plan.out, o.width / pw2, o.height / ph2, o.width, o.height, o.source_fps)
+
+
+def make_proxy(video: str, max_side: int = 960, max_fps: float = 30.0, progress=None) -> Proxy:
+    """長辺 max_side・max_fps 以下の分析用動画を作る（作成済みなら再利用）."""
+    plan = proxy_plan(video, max_side, max_fps)
+    if plan.out is None:
+        return plan.original
+    out = plan.out
     if not os.path.exists(out):
         os.makedirs(PROXY_DIR, exist_ok=True)
         tmp = out + ".part.mp4"
         base = ["ffmpeg", "-y", "-v", "error"]
-        rest = ["-i", video, "-an", "-vf", f"fps={fps},scale={pw}:{ph}",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p", tmp]
+        rest = ["-i", video, "-vf", plan.vf, *PROXY_OUTPUT, tmp]
         if progress:
             progress(0, 1)
         # まずハードウェアでの読み込み（Mac の VideoToolbox など）を試し、だめなら通常の読み込み
@@ -59,10 +84,8 @@ def make_proxy(video: str, max_side: int = 960, max_fps: float = 30.0, progress=
         if r.returncode != 0:
             r = subprocess.run(base + rest, capture_output=True, text=True)
         if r.returncode != 0:
-            return original  # 作れなければ元の動画で推定する（遅いが動く）
+            return plan.original  # 作れなければ元の動画で推定する（遅いが動く）
         os.replace(tmp, out)
         if progress:
             progress(1, 1)
-    # 実際にできた大きさから倍率を求める
-    ph2, pw2 = read_frame(out, 0).shape[:2]
-    return Proxy(out, w / pw2, h / ph2, w, h, info.fps)
+    return _finish(plan)

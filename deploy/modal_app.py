@@ -58,8 +58,8 @@ def track_pose(video: bytes, suffix: str) -> bytes:
 
 
 @app.function(
-    cpu=2.0,
-    memory=4096,
+    cpu=4.0,                   # 動画の変換（ffmpeg）と比較動画の作成を速くする
+    memory=6144,
     volumes={"/data": data},
     env={"DANCE_COMPARE_REMOTE_POSE": "dance-compare/track_pose"},  # 骨格推定は track_pose（GPU）に頼む
     timeout=60 * 60 * 4,       # 1 回の起動で使える最長時間

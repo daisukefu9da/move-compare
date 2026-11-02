@@ -35,37 +35,88 @@ def _key(video: str, extra: str) -> str:
     return hashlib.sha1(f"{os.path.abspath(video)}|{st.st_size}|{int(st.st_mtime)}|{extra}".encode()).hexdigest()[:16]
 
 
+@dataclass
+class _Plan:
+    out: str
+    key: str
+    vf: str
+    vopts: list[str]   # 映像の出力設定（-vf 以外）
+    w: int
+    h: int
+
+
+AUDIO_OUTPUT = ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]
+
+
+def _plan(video: str, max_side: int = 640, max_fps: float = 30.0, thumbs: int = 12, thumb_height: int = 72) -> _Plan:
+    info = probe(video)
+    h, w = read_frame(video, 0).shape[:2]
+    fps = min(info.fps, max_fps) if info.fps > 0 else max_fps
+    key = _key(video, f"{max_side}@{fps}|{thumbs}x{thumb_height}")
+    scale = min(1.0, max_side / max(w, h))
+    pw, ph = max(2, int(round(w * scale / 2)) * 2), max(2, int(round(h * scale / 2)) * 2)
+    vopts = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+             "-g", str(max(1, int(round(fps / 2))))]  # 0.5 秒ごとにキーフレーム（シークを速く）
+    return _Plan(os.path.join(PREVIEW_DIR, f"{key}.mp4"), key, f"fps={fps},scale={pw}:{ph}", vopts, w, h)
+
+
+def _ffmpeg(attempts: list[list[str]]) -> bool:
+    for args in attempts:
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error"] + args, capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
+    return False
+
+
+def prepare_media(video: str) -> None:
+    """分析用の軽い動画（media/proxy）とプレビュー動画を、動画を 1 回読むだけでまとめて作る.
+
+    iPhone の 4K 動画は読み込み（デコード）が重いので、別々に作ると 2 倍かかる。作成済みなら何もしない。
+    """
+    from .proxy import PROXY_OUTPUT, proxy_plan
+
+    pp, pv = proxy_plan(video), _plan(video)
+    if pp.out and not os.path.exists(pp.out) and not os.path.exists(pv.out) and shutil.which("ffmpeg"):
+        os.makedirs(os.path.dirname(pp.out), exist_ok=True)
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+        ptmp, vtmp = pp.out + ".part.mp4", pv.out + ".part.mp4"
+        fc = f"[0:v]split=2[a][b];[a]{pp.vf}[p];[b]{pv.vf}[q]"
+        outs = ["-filter_complex", fc, "-map", "[p]", *PROXY_OUTPUT, ptmp,
+                "-map", "[q]", *pv.vopts, "-movflags", "+faststart"]
+        ok = _ffmpeg([
+            ["-hwaccel", "auto", "-i", video, *outs, "-map", "0:a?", *AUDIO_OUTPUT, vtmp],
+            ["-i", video, *outs, "-map", "0:a?", *AUDIO_OUTPUT, vtmp],
+            ["-i", video, *outs, vtmp],  # 音声の形式が原因で失敗する場合は音声なし
+        ])
+        if ok:
+            os.replace(ptmp, pp.out)
+            os.replace(vtmp, pv.out)
+    # どちらかだけ足りない・まとめて作れなかった場合は、それぞれ作る（作成済みならすぐ返る）
+    from .proxy import make_proxy
+
+    make_proxy(video)
+    make_preview(video)
+
+
 def make_preview(video: str, max_side: int = 640, max_fps: float = 30.0, thumbs: int = 12,
                  thumb_height: int = 72) -> Preview:
     """プレビュー動画とコマの一覧画像を作る（作成済みなら再利用）."""
     import cv2
 
     info = probe(video)
-    h, w = read_frame(video, 0).shape[:2]
+    p = _plan(video, max_side, max_fps, thumbs, thumb_height)
+    out, key, w, h = p.out, p.key, p.w, p.h
     fps = min(info.fps, max_fps) if info.fps > 0 else max_fps
-    key = _key(video, f"{max_side}@{fps}|{thumbs}x{thumb_height}")
     os.makedirs(PREVIEW_DIR, exist_ok=True)
-
-    out = os.path.join(PREVIEW_DIR, f"{key}.mp4")
     if not os.path.exists(out) and shutil.which("ffmpeg"):
-        scale = min(1.0, max_side / max(w, h))
-        pw, ph = max(2, int(round(w * scale / 2)) * 2), max(2, int(round(h * scale / 2)) * 2)
         tmp = out + ".part.mp4"
-        vopts = ["-vf", f"fps={fps},scale={pw}:{ph}",
-                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
-                 "-g", str(max(1, int(round(fps / 2))))]  # 0.5 秒ごとにキーフレーム（シークを速く）
-        audio = ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]
-        attempts = [  # ハードウェアでの読み込み → 通常の読み込み → 音声なし（音声の形式が原因のことがある）
-            ["-hwaccel", "auto", "-i", video] + vopts + audio,
-            ["-i", video] + vopts + audio,
-            ["-i", video, "-an"] + vopts,
-        ]
-        for args in attempts:
-            r = subprocess.run(["ffmpeg", "-y", "-v", "error"] + args + ["-movflags", "+faststart", tmp],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
-                os.replace(tmp, out)
-                break
+        tail = ["-movflags", "+faststart", tmp]
+        if _ffmpeg([  # ハードウェアでの読み込み → 通常の読み込み → 音声なし（音声の形式が原因のことがある）
+            ["-hwaccel", "auto", "-i", video, "-vf", p.vf, *p.vopts, *AUDIO_OUTPUT, *tail],
+            ["-i", video, "-vf", p.vf, *p.vopts, *AUDIO_OUTPUT, *tail],
+            ["-i", video, "-an", "-vf", p.vf, *p.vopts, *tail],
+        ]):
+            os.replace(tmp, out)
 
     strip = os.path.join(PREVIEW_DIR, f"{key}_strip.jpg")
     if not os.path.exists(strip):

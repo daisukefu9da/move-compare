@@ -12,6 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from ..media.preview import make_preview
+from . import background
 
 _FRONTEND = os.path.join(os.path.dirname(__file__), "frontend", "trimmer")
 _component = components.declare_component("video_trimmer", path=_FRONTEND)
@@ -35,6 +36,7 @@ def _media_url(path: str | None, mimetype: str, coord: str) -> str | None:
 
 def _common(video: str, key: str) -> dict:
     with st.spinner("プレビュー動画を準備中…（初回のみ）"):
+        background.wait_media(video)  # 裏で作っている途中なら、それを待つ（同じ動画を 2 回変換しない）
         p = _preview(video, os.path.getmtime(video))
     return dict(video=_media_url(p.video, "video/mp4", f"trimmer.{key}.video"),
                 strip=_media_url(p.strip, "image/jpeg", f"trimmer.{key}.strip"),
