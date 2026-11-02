@@ -24,12 +24,12 @@ def endpoint() -> str | None:
 
 
 def video_uploader(label: str, key: str, max_side: int = 1280, fps: int = 30, bitrate: int = 4_000_000,
-                   chunk_mb: int = 8) -> tuple[str | None, dict | None]:
+                   chunk_mb: int = 4, parallel: int = 8) -> tuple[str | None, dict | None]:
     """(受け取った動画のパス, 送ったときの情報) を返す. まだ選ばれていなければ (None, None)."""
     # method: "auto"（ブラウザの動画変換 → だめなら再生しながら縮める）/ "video"（再生しながら縮める. 確認用）
     method = os.environ.get("DANCE_COMPARE_SHRINK_METHOD", "auto")
     v = _component(label=label, endpoint=endpoint(), max_side=max_side, fps=fps, bitrate=bitrate,
-                   chunk_mb=chunk_mb, method=method, key=key, default=None)
+                   chunk_mb=chunk_mb, parallel=parallel, method=method, key=key, default=None)
     if not v:
         return None, None
     path = upload_api.resolve(v.get("id", ""), v.get("name", ""))
