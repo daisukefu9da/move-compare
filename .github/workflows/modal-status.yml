@@ -31,6 +31,10 @@ jobs:
           for i in 1; do
             curl -s -o /dev/null -m 300 -w "HTTP %{http_code}  接続 %{time_connect}s  最初の応答 %{time_starttransfer}s  合計 %{time_total}s\n" "$URL" || echo "失敗（タイムアウトなど）"
           done
+      - name: アップロードの受け口を試す
+        run: |
+          curl -s -m 60 -X POST --data-binary "test" -w "  HTTP %{http_code}\n" \
+            "${URL}api/upload?id=00000000-0000-0000-0000-000000000000&offset=0&final=1&name=check.mp4" || echo "失敗"
       - name: 骨格推定（GPU）を試す（起動 → 短い動画）
         run: |
           sudo apt-get install -y -qq ffmpeg > /dev/null
